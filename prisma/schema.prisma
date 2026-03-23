@@ -1,0 +1,790 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  VENDOR
+  CUSTOMER
+}
+
+model User {
+  id                   String               @id @default(uuid())
+  email                String               @unique
+  password             String
+  auditLogs            AuditLog[]
+  firstName            String?
+  lastName             String?
+  phone                String?
+  isActive             Boolean              @default(true)
+  reviews              Review[]
+  wishlist             Wishlist[]
+  addresses            Address[]
+  followers            VendorFollower[]
+  browsingHistory      BrowsingHistory[]
+  cart                 Cart?
+  role                 Role                 @default(CUSTOMER)
+  createdAt            DateTime             @default(now())
+  vendor               Vendor?
+  pushToken            String?
+  orders               Order[]
+  refreshTokens        RefreshToken[]
+  is2faEnabled         Boolean              @default(false)
+  sessions             Session[] // Just add this one line heren
+  blockedIps           BlockedIp[]          @relation("AdminBlockedIps")
+  notificationSettings NotificationSetting? // <--- ADD THIS LINE
+  tickets              Ticket[]
+  returnRequests       ReturnRequest[]
+  conversations        OrderConversation[]
+
+  @@index([email])
+}
+
+model VendorFollower {
+  id String @id @default(uuid())
+
+  // The Vendor being followed
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+
+  // The User who is following
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  // Ensures a user can't follow the same vendor twice
+  @@unique([vendorId, userId])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device    String // e.g., "iPhone 15, Chrome on Windows"
+  ipAddress String
+  lastUsed  DateTime @default(now())
+  isCurrent Boolean  @default(false)
+}
+
+model BlockedIp {
+  id        String   @id @default(cuid())
+  ip        String   @unique
+  reason    String?
+  adminId   String
+  admin     User     @relation("AdminBlockedIps", fields: [adminId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  email     String
+  ip        String
+  userAgent String?
+  status    String // "SUCCESS" or "FAILED"
+  createdAt DateTime @default(now())
+}
+
+model NotificationSetting {
+  id            String  @id @default(uuid())
+  userId        String  @unique
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderUpdates  Boolean @default(true)
+  promotions    Boolean @default(false)
+  chatMessages  Boolean @default(true)
+  storeActivity Boolean @default(false)
+  priceDrops    Boolean @default(true)
+  emailEnabled  Boolean @default(true)
+  smsEnabled    Boolean @default(false)
+  pushEnabled   Boolean @default(true)
+}
+
+// Add this line to your User model:
+// notificationSettings NotificationSetting?
+
+model Address {
+  id          String   @id @default(uuid())
+  fullName    String // Added for "John Doe"
+  phoneNumber String // Added for "+234..."
+  street      String
+  city        String
+  state       String
+  postalCode  String? // Made optional with ?
+  isDefault   Boolean  @default(false)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  orders      Order[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Wishlist {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model BrowsingHistory {
+  id        String   @id @default(uuid())
+  userId    String
+  productId String
+  viewedAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([userId, productId]) // Keeps history clean (no duplicates)
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NOT_SUBMITTED
+}
+
+model Vendor {
+  id                   String                @id @default(uuid())
+  storeName            String
+  imageUrl             String?
+  isVerified           Boolean               @default(false)
+  userId               String                @unique
+  user                 User                  @relation(fields: [userId], references: [id])
+  // Relations
+  products             Product[]
+  coupons              Coupon[] // <--- Add this line
+  orders               Order[]
+  transactions         WalletTransaction[]
+  campaignParticipants CampaignParticipant[]
+  campaignProducts     CampaignProduct[]
+  bankName             String? // Ensure these are inside the Vendor model
+  accountNumber        String? // Ensure these are inside the Vendor model
+  // ... rest of model
+  slug                 String?               @unique // Add this for the URL
+  description          String?               @db.Text // Add this for the About section
+  shippingFee          Float                 @default(0.0) // Add this for Logistics
+  commission           Float                 @default(10.0)
+  walletBalance        Decimal               @default(0.0)
+  status               VendorStatus          @default(ACTIVE)
+  createdAt            DateTime              @default(now())
+  followers            VendorFollower[]
+  kycStatus            KycStatus             @default(NOT_SUBMITTED)
+  idType               String? // e.g., NIN, Driver's License, International Passport
+  idNumber             String?
+  idImage              String? // URL to the uploaded image
+  reviews              Review[]
+  withdrawalRequests   WithdrawalRequest[]
+  vendorWallet         VendorWallet?
+}
+
+model ProductCoupon {
+  id        String @id @default(cuid())
+  productId String
+  couponId  String
+  vendorId  String
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  coupon  Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([productId, couponId]) // Ensures an artifact doesn't join the same event twice
+  @@index([couponId])
+  @@index([vendorId])
+}
+
+enum CouponType {
+  PLATFORM
+  VENDOR
+  JOINT
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model Coupon {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  description String?
+
+  type           CouponType      @default(VENDOR)
+  discountType   DiscountType    @default(PERCENTAGE)
+  discountValue  Decimal         @db.Decimal(10, 2)
+  productCoupons ProductCoupon[]
+
+  maxDiscountAmount Decimal? @db.Decimal(10, 2)
+
+  minOrderValue Decimal? @db.Decimal(10, 2)
+
+  usageLimit   Int @default(100)
+  usedCount    Int @default(0)
+  perUserLimit Int @default(1)
+
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  startDate DateTime @default(now())
+  endDate   DateTime
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  orders    Order[]
+
+  @@index([code])
+  @@index([vendorId])
+  @@index([isActive, startDate, endDate])
+}
+
+model Announcement {
+  id String @id @default(cuid())
+
+  title   String
+  content String @db.Text
+
+  targetGroup AnnouncementTarget
+
+  adminId String
+
+  priority AnnouncementPriority @default(NORMAL)
+
+  expiresAt DateTime?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+}
+
+enum AnnouncementTarget {
+  ALL
+  USERS
+  VENDORS
+}
+
+enum AnnouncementPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model WalletTransaction {
+  id          String          @id @default(uuid())
+  vendorId    String
+  amount      Decimal
+  metadata    Json?
+  type        TransactionType
+  status      String          @default("COMPLETED") // PENDING, COMPLETED, FAILED
+  reference   String          @unique // tx_ref or payout_ref
+  description String?
+  createdAt   DateTime        @default(now())
+  vendor      Vendor          @relation(fields: [vendorId], references: [id])
+}
+
+enum VendorStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_APPROVAL
+}
+
+enum TransactionType {
+  SALE // Money coming in from an order
+  WITHDRAW // Money going out to vendor's bank
+  REFUND // Money being moved back to customer
+  SALE_SETTLEMENT
+}
+
+model Product {
+  id               String            @id @default(uuid())
+  title            String
+  description      String
+  price            Decimal           @db.Decimal(12, 2)
+  stock            Int               @default(0)
+  sku              String?           @unique
+  status           ProductStatus     @default(PENDING)
+  isActive         Boolean           @default(true)
+  isDeleted        Boolean           @default(false)
+  vendor           Vendor            @relation(fields: [vendorId], references: [id])
+  vendorId         String
+  storeId          String?
+  cartItems        CartItem[]
+  category         Category          @relation(fields: [categoryId], references: [id])
+  categoryId       String
+  wishlist         Wishlist[]
+  productCoupons   ProductCoupon[]
+  browsingHistory  BrowsingHistory[]
+  campaignProducts CampaignProduct[]
+  images           ProductImage[]
+  reviews          Review[]
+  orderItems       OrderItem[]
+  createdAt        DateTime          @default(now())
+  averageRating    Float             @default(0) // Ensure this exists
+  reviewCount      Int               @default(0) // Ensure this exists
+
+  @@index([vendorId])
+  @@index([categoryId])
+}
+
+enum ProductStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  imageUrl  String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+}
+
+model Order {
+  id          String  @id @default(uuid())
+  orderNumber String? @unique @default(cuid())
+
+  // FINANCIAL REGISTRY
+  // Use Decimal for high-precision money handling (recommended for Flutterwave)
+  totalAmount   Decimal  @db.Decimal(12, 2)
+  totalPaid     Decimal? @db.Decimal(12, 2)
+  commission    Decimal? @db.Decimal(12, 2)
+  vendorEarning Decimal? @db.Decimal(12, 2)
+
+  // STATUS REGISTRY
+  status       OrderStatus  @default(PENDING)
+  payoutStatus PayoutStatus @default(LOCKED)
+
+  // LOGISTICS
+  trackingNumber String?
+  carrier        String?
+
+  // RELATIONS
+  vendorId String?
+  vendor   Vendor? @relation(fields: [vendorId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  addressId String?
+  address   Address? @relation(fields: [addressId], references: [id])
+
+  couponId String?
+  coupon   Coupon? @relation(fields: [couponId], references: [id])
+
+  items             OrderItem[]
+  payment           Payment?
+  returnRequest     ReturnRequest?
+  orderConversation OrderConversation?
+  dispute           Dispute?
+  campaignLogs      OrderCampaign[]
+
+  createdAt DateTime @default(now())
+}
+
+model OrderCampaign {
+  id             String   @id @default(uuid())
+  orderId        String
+  order          Order    @relation(fields: [orderId], references: [id])
+  title          String // e.g., "Summer Sale 2024"
+  discountAmount Float
+  createdAt      DateTime @default(now())
+}
+
+// Ensure this Enum is at the bottom of your schema file
+enum PayoutStatus {
+  LOCKED // Funds held in platform escrow
+  AVAILABLE // 48h window passed, vendor can withdraw
+  PAID // Withdrawal successful
+  REFUNDED // Order returned, funds sent back to customer
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  COMPLETED
+}
+
+// schema.prisma
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id])
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id        String  @id @default(uuid())
+  cartId    String
+  cart      Cart    @relation(fields: [cartId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+}
+
+// Add this to your schema.prisma
+model Review {
+  id        String   @id @default(uuid())
+  rating    Int
+  comment   String?
+  reply     String?
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([productId, userId])
+}
+
+model OrderItem {
+  id              String   @id @default(uuid())
+  quantity        Int
+  priceAtPurchase Decimal  @db.Decimal(12, 2)
+  order           Order    @relation(fields: [orderId], references: [id])
+  orderId         String
+  product         Product  @relation(fields: [productId], references: [id])
+  productId       String
+  // --- NEW FINANCIAL FIELDS ---
+  commission      Float? // Platform's cut for this specific item
+  vendorEarning   Float? // Net amount for the vendor
+  payoutStatus    String?  @default("PENDING") // e.g., "LOCKED", "AVAILABLE", "PAID"
+  createdAt       DateTime @default(now())
+}
+
+model Payment {
+  id         String        @id @default(uuid())
+  reference  String        @unique
+  status     PaymentStatus @default(PENDING)
+  provider   String
+  order      Order         @relation(fields: [orderId], references: [id])
+  orderId    String        @unique
+  metadata   String?
+  externalId String?
+  createdAt  DateTime      @default(now())
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESSFUL
+  FAILED
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model WithdrawalRequest {
+  id          String           @id @default(uuid())
+  amount      Decimal          @db.Decimal(12, 2)
+  status      WithdrawalStatus @default(PENDING)
+  vendorId    String
+  vendor      Vendor           @relation(fields: [vendorId], references: [id])
+  bankDetails Json
+  createdAt   DateTime         @default(now())
+  metadata    Json?
+  updatedAt   DateTime         @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  expiresAt DateTime
+}
+
+model Category {
+  id   String @id @default(uuid())
+  name String
+  slug String @unique // e.g., "men-shoes" for clean URLs
+
+  // Self-referencing relationship
+  parentId String?
+  parent   Category?  @relation("CategoryToSub", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryToSub")
+
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([parentId])
+}
+
+// Support & Financial Core
+model OrderConversation {
+  id        String         @id @default(cuid())
+  orderId   String         @unique
+  order     Order          @relation(fields: [orderId], references: [id])
+  userId    String
+  vendorId  String
+  isFrozen  Boolean        @default(false)
+  messages  OrderMessage[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  user      User           @relation(fields: [userId], references: [id])
+}
+
+model OrderMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   OrderConversation @relation(fields: [conversationId], references: [id])
+  senderId       String
+  senderRole     String // "USER", "VENDOR", "ADMIN"
+  content        String
+  type           String            @default("TEXT") // "TEXT", "IMAGE", "SYSTEM"
+  isFlagged      Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+}
+
+model ReturnRequest {
+  id            String   @id @default(cuid())
+  orderId       String   @unique
+  userId        String
+  order         Order    @relation(fields: [orderId], references: [id])
+  vendorId      String
+  reason        String
+  description   String
+  imageProof    String?
+  status        String   @default("REQUESTED") // "REQUESTED", "UNDER_REVIEW", "APPROVED", "REJECTED"
+  adminDecision String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model VendorWallet {
+  id               String   @id @default(cuid())
+  vendorId         String   @unique
+  vendor           Vendor   @relation(fields: [vendorId], references: [id])
+  pendingBalance   Float    @default(0.0) // Locked until 3-day window passes
+  availableBalance Float    @default(0.0) // Ready for withdrawal
+  totalEarnings    Float    @default(0.0)
+  bankName         String?
+  accoutNumber     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Ticket {
+  id String @id @default(cuid())
+
+  userId  String
+  subject String
+  message String @db.Text
+
+  status TicketStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model FAQ {
+  id       String @id @default(cuid())
+  question String
+  answer   String
+  category String // e.g., "ORDERS", "PAYMENT", "ACCOUNT"
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  adminId String
+  admin   User   @relation(fields: [adminId], references: [id])
+
+  action     AuditAction
+  targetId   String?
+  targetType String? // USER | VENDOR | PRODUCT | ORDER
+
+  details   String? @db.Text
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([targetId])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  APPROVE_VENDOR_KYC
+  REJECT_VENDOR_KYC
+  BAN_USER
+  UNBAN_USER
+  DELETE_PRODUCT
+  APPROVE_PRODUCT
+  REJECT_PRODUCT
+  APPROVE_PAYOUT
+  FORCE_REFUND
+  CREATE_COUPON
+  UPDATE_COUPON
+  UPDATE_ORDER
+  UPDATE_SETTING
+}
+
+model Campaign {
+  id           String                @id @default(cuid())
+  title        String
+  description  String
+  discount     Float // Added: The fixed % for this campaign
+  bannerUrl    String?
+  startDate    DateTime
+  endDate      DateTime
+  isActive     Boolean               @default(true)
+  participants CampaignParticipant[]
+  products     CampaignProduct[] // Added: Link to actual items
+  createdAt    DateTime              @default(now())
+}
+
+model CampaignParticipant {
+  id         String   @id @default(cuid())
+  campaignId String
+  vendorId   String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+  joinedAt   DateTime @default(now())
+
+  @@unique([campaignId, vendorId])
+}
+
+// NEW: This model tracks exactly which items are discounted
+model CampaignProduct {
+  id         String   @id @default(cuid())
+  campaignId String
+  productId  String
+  vendorId   String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@unique([campaignId, productId]) // One product can't have two discounts in one campaign
+}
+
+model FraudLog {
+  id String @id @default(cuid())
+
+  userId   String?
+  vendorId String?
+  orderId  String?
+
+  severity FraudSeverity
+  type     FraudType
+
+  description String
+
+  isResolved Boolean @default(false)
+
+  resolvedBy String?
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([vendorId])
+}
+
+enum FraudSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FraudType {
+  MULTIPLE_FAILED_LOGINS
+  SUSPICIOUS_PAYOUT
+  MULTIPLE_ACCOUNTS
+  RAPID_ORDER_CANCELLATION
+  CHARGEBACK_RISK
+}
+
+model Dispute {
+  id String @id @default(cuid())
+
+  orderId String @unique
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  customerId String
+  vendorId   String
+
+  reason String @db.Text
+
+  status DisputeStatus @default(OPEN)
+
+  refundAmount Decimal? @db.Decimal(10, 2)
+
+  resolution String? @db.Text
+  adminId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evidences DisputeEvidence[]
+  messages  DisputeMessage[]
+}
+
+enum DisputeStatus {
+  OPEN
+  SELLER_RESPONDED
+  BUYER_RESPONDED
+  UNDER_REVIEW
+  RESOLVED_REFUND
+  RESOLVED_REPLACEMENT
+  REJECTED
+  CLOSED
+}
+
+model DisputeEvidence {
+  id         String   @id @default(cuid())
+  disputeId  String
+  url        String
+  uploadedBy String // CUSTOMER | VENDOR
+  createdAt  DateTime @default(now())
+
+  dispute Dispute @relation(fields: [disputeId], references: [id])
+}
+
+model DisputeMessage {
+  id        String   @id @default(cuid())
+  disputeId String
+  senderId  String
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+
+  dispute Dispute @relation(fields: [disputeId], references: [id])
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g., "MARKETPLACE_COMMISSION"
+  value       String // stored as string, parsed in service
+  description String?
+  updatedAt   DateTime @updatedAt
+}
