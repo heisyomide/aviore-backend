@@ -1,5 +1,5 @@
 import { Module, Global, NestModule, MiddlewareConsumer } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { CacheModule } from '@nestjs/cache-manager';
@@ -48,7 +48,7 @@ import { CartModule } from './cart/cart.module';
         DATABASE_URL: Joi.string().required(),
         REDIS_HOST: Joi.string().required(),
         REDIS_PORT: Joi.number().default(6379),
-        FRONTEND_URL: Joi.string().default('http://localhost:3000'),
+        FRONTEND_URL: Joi.string().default('https://aviore-frontend-v2.vercel.app'),
         CLOUDINARY_CLOUD_NAME: Joi.string().required(),
         CLOUDINARY_API_KEY: Joi.string().required(),
         CLOUDINARY_API_SECRET: Joi.string().required(),
@@ -62,12 +62,18 @@ import { CartModule } from './cart/cart.module';
       limit: 20,
     }]),
 
-    // 3. INFRASTRUCTURE: REDIS QUEUE (BullMQ)
+// 3. INFRASTRUCTURE: REDIS QUEUE (BullMQ)
     BullModule.forRootAsync({
-      useFactory: () => ({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
         redis: {
-          host: process.env.REDIS_HOST,
-          port: Number(process.env.REDIS_PORT),
+          host: config.get('REDIS_HOST'),
+          port: config.get('REDIS_PORT'),
+          username: config.get('REDIS_USERNAME') || 'default',
+          password: config.get('REDIS_PASSWORD'),
+          tls: {}, // 🔥 Required for Upstash
+          maxRetriesPerRequest: null, // 🔥 Required for BullMQ + Cloud Redis
+          enableReadyCheck: false,
         },
       }),
     }),
@@ -75,17 +81,24 @@ import { CartModule } from './cart/cart.module';
     // 4. INFRASTRUCTURE: REDIS CACHING
     CacheModule.registerAsync({
       isGlobal: true,
-      useFactory: async () => ({
+      inject: [ConfigService],
+      useFactory: async (config: ConfigService) => ({
         store: await redisStore({
           socket: {
-            host: process.env.REDIS_HOST,
-            port: Number(process.env.REDIS_PORT),
+            host: config.get('REDIS_HOST'),
+            port: config.get('REDIS_PORT'),
+            tls: true,
+            reconnectStrategy: (retries) => Math.min(retries * 50, 2000), // 🛡️ Prevents ECONNRESET
+            keepAlive: 5000,
           },
-          ttl: 600000, // 10 Minutes
+          username: config.get('REDIS_USERNAME') || 'default',
+          password: config.get('REDIS_PASSWORD'),
+          ttl: 600000,
         }),
       }),
     }),
 
+    
     // 5. DOMAIN FEATURE MODULES
     AuthModule,
     UsersModule,
@@ -109,6 +122,7 @@ export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
       .apply(FirewallMiddleware)
-      .forRoutes('*'); 
+      // 🛠️ FIX: Changed '*' to '*path' to resolve path-to-regexp warning
+      .forRoutes('*path'); 
   }
 }
