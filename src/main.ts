@@ -41,7 +41,8 @@ async function bootstrap() {
   app.enableCors({
     origin: [
       process.env.FRONTEND_URL, // Your Vercel URL
-      'https://aviore-frontend-v2.vercel.app',  // Local development
+     'http://localhost:3000', 
+      'https://aviore-frontend-v2.vercel.app' // Local development
     ].filter(Boolean), 
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
