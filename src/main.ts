@@ -7,9 +7,10 @@ import helmet from 'helmet';
 import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 import { initializeFirebase } from './config/firebase.config';
+import { NestExpressApplication } from '@nestjs/platform-express'; // Added for proxy support
 
 async function bootstrap() {
-  // 1. HARDENED LOGGER (Console-focused for Render)
+  // 1. HARDENED LOGGER
   const loggerInstance = WinstonModule.createLogger({
     transports: [
       new winston.transports.Console({
@@ -24,19 +25,23 @@ async function bootstrap() {
     ],
   });
 
-  const app = await NestFactory.create(AppModule, {
+  // Use NestExpressApplication to access underlying Express settings
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: loggerInstance,
   });
 
-  // 2. INITIALIZE EXTERNAL SERVICES
   initializeFirebase();
 
-  // 3. SECURITY & MIDDLEWARE
+  // 🛡️ 2. RENDER PROXY SUPPORT
+  // Required for FirewallMiddleware to get the REAL client IP from Render's load balancer
+  app.set('trust proxy', 1);
+
+  // 🛡️ 3. SECURITY
   app.use(helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" }, // Allows images to load on frontend
+    crossOriginResourcePolicy: { policy: "cross-origin" },
   }));
 
-  // 🚀 SMART CORS: Handles comma-separated strings from Env Vars
+  // 🚀 4. CLEAN CORS LOGIC
   const rawOrigins = process.env.FRONTEND_URL || '';
   const origins = [
     'http://localhost:3000',
@@ -54,7 +59,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.enableShutdownHooks();
 
-  // 4. GLOBAL FILTERS & PIPES
+  // 5. GLOBAL FILTERS & PIPES
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
@@ -63,7 +68,7 @@ async function bootstrap() {
     transformOptions: { enableImplicitConversion: true },
   }));
 
-  // 5. SWAGGER DOCUMENTATION
+  // 6. SWAGGER
   const config = new DocumentBuilder()
     .setTitle('Aviore Marketplace API')
     .setDescription('Core API for Admin, Vendor, and Customers')
@@ -73,18 +78,17 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  // 6. PORT BINDING (Render Requirement)
-  // 🚀 Fallback to 5000 is critical for local development
+  // 7. PORT BINDING
   const port = process.env.PORT || 5000;
-  
   await app.listen(port, '0.0.0.0');
   
-  const serverUrl = process.env.NODE_ENV === 'production' 
-    ? `https://aviore-backend.onrender.com` 
-    : `http://localhost:${port}`;
+  // 🚀 CLEAN LOGGING: No more accidental commas
+  const isProd = process.env.NODE_ENV === 'production';
+  const displayUrl = isProd 
+    ? `https://aviore-backend.onrender.com/api` 
+    : `http://localhost:${port}/api`;
 
-  Logger.log(`🚀 Aviore API Vault Live on: ${serverUrl}/api`, 'Bootstrap');
-  Logger.log(`📜 Documentation available at: ${serverUrl}/api/docs`, 'Bootstrap');
+  Logger.log(`🚀 Aviore API Vault is live at: ${displayUrl}`, 'Bootstrap');
 }
 
 bootstrap();

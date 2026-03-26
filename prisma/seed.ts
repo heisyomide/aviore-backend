@@ -99,7 +99,7 @@ async function main() {
       .map((name) => `"${name}"`)
       .join(', ');
 
-    await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables} CASCADE;`);
+  
 
     // 2. CATEGORY HIERARCHY
     console.log('--- BUILDING_CATEGORY_TREE ---');

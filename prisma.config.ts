@@ -9,7 +9,7 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   datasource: {
     // In Prisma 7, this is where the engine looks for the URL during generation
-    url: process.env.DATABASE_URL,
+    url: process.env.DIRECT_URL,
   },
   migrations: {
     // This tells Prisma to use ts-node to run your seed script
