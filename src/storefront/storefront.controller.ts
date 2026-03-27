@@ -29,6 +29,12 @@ async getVendors() {
     return this.storefrontService.getTopDeals();
   }
 
+  // storefront.controller.ts
+@Get('best-sellers')
+async getBestSellers(@Query('limit') limit: number = 10) {
+  return this.storefrontService.getBestSellers(limit);
+}
+
 // src/storefront/storefront.controller.ts
 // src/storefront/storefront.controller.ts
 

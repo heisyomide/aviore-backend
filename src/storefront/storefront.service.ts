@@ -263,6 +263,52 @@ export class StorefrontService {
     });
   }
 
+
+  // storefront.service.ts
+
+async getBestSellers(limit: number = 10) {
+  // 🚀 1. Aggregate OrderItems to find the most sold products
+  const topSellingData = await this.prisma.orderItem.groupBy({
+    by: ['productId'],
+    _sum: {
+      quantity: true, // We count total units sold, not just number of orders
+    },
+    orderBy: {
+      _sum: {
+        quantity: 'desc',
+      },
+    },
+    take: limit,
+  });
+
+  // Extract the IDs
+  const productIds = topSellingData.map((item) => item.productId);
+
+  // 🚀 2. Fetch the actual product details for the storefront
+  return this.prisma.product.findMany({
+    where: {
+      id: { in: productIds },
+      isActive: true,    // Fix: Your schema uses isActive
+      isDeleted: false,  // Fix: Your schema uses isDeleted
+    },
+    include: {
+      images: {
+        take: 1, // Usually just need the main image for the listing
+      },
+      vendor: {
+        select: {
+          storeName: true,
+        },
+      },
+      category: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  });
+}
+
     async getCategoryStrip(slug: string) {
     return this.prisma.product.findMany({
       where: { 
