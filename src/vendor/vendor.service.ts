@@ -89,6 +89,36 @@ async getVendorDashboard(vendorId: string) {
   };
 }
 
+async getPublicProfileBySlug(slug: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { slug },
+      select: {
+        storeName: true,
+        imageUrl: true,
+        description: true,
+        isVerified: true,
+        createdAt: true,
+        _count: {
+          select: { products: true }
+        }
+      },
+    });
+
+    if (!vendor) throw new NotFoundException('Vendor Node not found');
+    return vendor;
+  }
+
+  // 🚀 SLUG GENERATOR HELPER
+  slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+
 async requestWithdrawal(vendorId: string, amount: number) {
   const wallet = await this.prisma.vendorWallet.findUnique({ 
     where: { vendorId },

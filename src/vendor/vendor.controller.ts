@@ -202,6 +202,11 @@ async requestWithdrawal(
   }
 }
 
+@Get('public-profile/:slug')
+  async getPublicProfile(@Param('slug') slug: string) {
+    return this.vendorService.getPublicProfileBySlug(slug);
+  }
+
 /**
    * GET /vendor/settings/full-profile
    * Fetches the complete identity, logistics, and compliance data for the settings page.
