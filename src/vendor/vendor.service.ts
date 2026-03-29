@@ -64,7 +64,7 @@ async getVendorDashboard(vendorId: string) {
       storeName: vendor.storeName,
       isVerified: vendor.isVerified,
       ownerName: `${vendor.user.firstName} ${vendor.user.lastName}`,
-      slug: true,
+      slug: vendor.slug,
     },
     wallet: {
       // Handling potential nulls and Decimal conversions
