@@ -161,15 +161,19 @@ export class StorefrontService {
    */
 // backend: src/storefront/storefront.service.ts (or wherever these live)
 
-async getVendorStorefront(vendorId: string) {
+// backend: src/storefront/storefront.service.ts
+
+// 🚀 RENAME parameter to 'slug' for clarity
+async getVendorStorefront(slug: string) { 
   const vendor = await this.prisma.vendor.findUnique({
-    where: { id: vendorId },
+    // 🚀 CHANGE THIS FROM 'id' TO 'slug'
+    where: { slug: slug }, 
     select: {
       id: true,
       storeName: true,
-      slug: true, // 🚀 ADD THIS: Now the frontend can see the slug!
+      slug: true, 
       description: true,
-      imageUrl: true, // Also ensure this is here for the logo
+      imageUrl: true, 
       _count: { select: { followers: true, products: true } },
       products: {
         where: { status: ProductStatus.APPROVED, isDeleted: false },
@@ -179,7 +183,7 @@ async getVendorStorefront(vendorId: string) {
     }
   });
 
-  if (!vendor) throw new NotFoundException('Vendor not found');
+  if (!vendor) throw new NotFoundException('Vendor Registry Node Null');
   return vendor;
 }
 
