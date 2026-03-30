@@ -164,27 +164,64 @@ export class StorefrontService {
 // backend: src/storefront/storefront.service.ts
 
 // 🚀 RENAME parameter to 'slug' for clarity
-async getVendorStorefront(slug: string) { 
-  const vendor = await this.prisma.vendor.findUnique({
-    // 🚀 CHANGE THIS FROM 'id' TO 'slug'
-    where: { slug: slug }, 
+// backend: src/storefront/storefront.service.ts
+
+async getVendorStorefront(identifier: string) {
+  // 1. Attempt to find by Slug first (The primary Registry protocol)
+  let vendor = await this.prisma.vendor.findUnique({
+    where: { slug: identifier },
     select: {
       id: true,
       storeName: true,
-      slug: true, 
+      slug: true,
       description: true,
-      imageUrl: true, 
+      imageUrl: true,
+      isVerified: true, // Recommended to add this for the Shield badge
       _count: { select: { followers: true, products: true } },
       products: {
         where: { status: ProductStatus.APPROVED, isDeleted: false },
         include: this.productIncludes,
-        orderBy: { createdAt: 'desc' }
-      }
-    }
+        orderBy: { createdAt: 'desc' },
+      },
+    },
   });
 
-  if (!vendor) throw new NotFoundException('Vendor Registry Node Null');
+  // 2. FALLBACK: If not found by slug, and identifier looks like a UUID, search by ID
+  // This handles vendors like "Avicore" who have a null slug in your JSON
+  if (!vendor && this.isValidUUID(identifier)) {
+    vendor = await this.prisma.vendor.findUnique({
+      where: { id: identifier },
+      select: {
+        id: true,
+        storeName: true,
+        slug: true,
+        description: true,
+        imageUrl: true,
+        isVerified: true,
+        _count: { select: { followers: true, products: true } },
+        products: {
+          where: { status: ProductStatus.APPROVED, isDeleted: false },
+          include: this.productIncludes,
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+  }
+
+  if (!vendor) {
+    throw new NotFoundException('Vendor_Registry_Node_Null');
+  }
+
   return vendor;
+}
+
+/**
+ * Helper to check if the string is a valid UUID
+ * Prevents Prisma from crashing when searching 'id' with a plain string like 'havenstore'
+ */
+private isValidUUID(str: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
 }
 
 async getAllVendors(searchTerm?: string) {
