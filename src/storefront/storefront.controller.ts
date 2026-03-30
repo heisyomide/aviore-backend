@@ -54,12 +54,11 @@ async getCampaigns() {
 }
 
 
-@Get('vendors/:id')
-  async getVendorStorefront(@Param('id') id: string) {
-    // Calling the refactored service method we just built
-    return this.storefrontService.getVendorStorefront(id);
+@Get('vendors/public-profile/:identifier')
+  async getVendorStorefront(@Param('identifier') identifier: string) {
+    // This handles both 'havenstore' (slug) and 'c7b2-...' (UUID)
+    return this.storefrontService.getVendorStorefront(identifier);
   }
-  
 
 
   @Get('category/:slug')
