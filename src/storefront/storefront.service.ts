@@ -159,46 +159,48 @@ export class StorefrontService {
   /**
    * 🚀 3. VENDOR STOREFRONT
    */
-  async getVendorStorefront(vendorId: string) {
-    const vendor = await this.prisma.vendor.findUnique({
-      where: { id: vendorId },
-      select: {
-        id: true,
-        storeName: true,
-        description: true,
-        _count: { select: { followers: true, products: true } },
-        products: {
-          where: { status: ProductStatus.APPROVED, isDeleted: false },
-          include: this.productIncludes,
-          orderBy: { createdAt: 'desc' }
-        }
-      }
-    });
+// backend: src/storefront/storefront.service.ts (or wherever these live)
 
-    if (!vendor) throw new NotFoundException('Vendor not found');
-    return vendor;
-  }
-
-  /**
-   * 🚀 4. ALL VENDORS (SEARCHABLE)
-   */
-  async getAllVendors(searchTerm?: string) {
-    return this.prisma.vendor.findMany({
-      where: { 
-        status: VendorStatus.ACTIVE,
-        ...(searchTerm && {
-          storeName: { contains: searchTerm, mode: 'insensitive' },
-        }),
-      },
-      select: {
-        id: true,
-        storeName: true,
-        description: true,
-        imageUrl: true,
-        _count: { select: { products: true, followers: true } }
+async getVendorStorefront(vendorId: string) {
+  const vendor = await this.prisma.vendor.findUnique({
+    where: { id: vendorId },
+    select: {
+      id: true,
+      storeName: true,
+      slug: true, // 🚀 ADD THIS: Now the frontend can see the slug!
+      description: true,
+      imageUrl: true, // Also ensure this is here for the logo
+      _count: { select: { followers: true, products: true } },
+      products: {
+        where: { status: ProductStatus.APPROVED, isDeleted: false },
+        include: this.productIncludes,
+        orderBy: { createdAt: 'desc' }
       }
-    });
-  }
+    }
+  });
+
+  if (!vendor) throw new NotFoundException('Vendor not found');
+  return vendor;
+}
+
+async getAllVendors(searchTerm?: string) {
+  return this.prisma.vendor.findMany({
+    where: { 
+      status: VendorStatus.ACTIVE,
+      ...(searchTerm && {
+        storeName: { contains: searchTerm, mode: 'insensitive' },
+      }),
+    },
+    select: {
+      id: true,
+      storeName: true,
+      slug: true, // 🚀 ADD THIS: This fixes the "Popular Vendors" list!
+      description: true,
+      imageUrl: true,
+      _count: { select: { products: true, followers: true } }
+    }
+  });
+}
 
   /**
    * 🚀 5. ACTIVE CAMPAIGNS
