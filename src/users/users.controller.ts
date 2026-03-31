@@ -86,19 +86,30 @@ async updateReview(
     return this.vendorService.getFollowedVendors(req.user.id);
   }
 
-@Get('history')
-@UseGuards(JwtAuthGuard)
-async getHistory(@Req() req) {
-  // This pulls the list so your frontend can map through it 
-  // and show those cards you designed.
-  return this.usersService.getHistory(req.user.id);
-}
-@Delete('history')
-@UseGuards(JwtAuthGuard)
-async clearMyHistory(@Req() req) {
-  await this.usersService.clearHistory(req.user.id);
-  return { message: "History cleared successfully" };
-}
+@Post('history/:productId')
+  async recordView(@Req() req, @Param('productId') productId: string) {
+    return this.usersService.recordProductView(req.user.id, productId);
+  }
+
+  /**
+   * 📋 FETCH PERSONAL REGISTRY
+   */
+  @Get('history')
+  async getMyHistory(@Req() req) {
+    return this.usersService.getHistory(req.user.id);
+  }
+
+  /**
+   * 🧹 PURGE REGISTRY
+   */
+  @Delete('history')
+  async clearMyHistory(@Req() req) {
+    await this.usersService.clearHistory(req.user.id);
+    return { 
+      status: 'SUCCESS',
+      message: "Registry history purged successfully." 
+    };
+  }
 
 
 @Patch('toggle-2fa')

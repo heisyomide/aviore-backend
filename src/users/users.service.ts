@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import * as bcrypt from 'bcrypt';
 import { CreateAddressDto } from './dto/create-address.dto';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   constructor(private prisma: PrismaService) {}
 
   // --- IDENTITY LOGIC ---
@@ -250,31 +251,65 @@ async updateProfile(userId: string, data: { firstName?: string; lastName?: strin
 
 // users.service.ts
 async recordProductView(userId: string, productId: string) {
-  // We use upsert so if they look at the same product twice, 
-  // we just move it to the top by updating the timestamp.
-  return this.prisma.browsingHistory.upsert({
-    where: {
-      userId_productId: { userId, productId },
-    },
-    update: { viewedAt: new Date() },
-    create: { userId, productId },
-  });
-}
+    try {
+      // First, verify product exists to prevent ghost history
+      const productExists = await this.prisma.product.findUnique({
+        where: { id: productId },
+      });
 
-async getHistory(userId: string) {
-  return this.prisma.browsingHistory.findMany({
-    where: { userId },
-    include: {
-      product: true, // This brings the price, image, and name
-    },
-    orderBy: { viewedAt: 'desc' },
-  });
-}
-async clearHistory(userId: string) {
-  return this.prisma.browsingHistory.deleteMany({
-    where: { userId },
-  });
-}
+      if (!productExists) throw new NotFoundException("Product node not found.");
+
+      return await this.prisma.browsingHistory.upsert({
+        where: {
+          userId_productId: { userId, productId },
+        },
+        update: { viewedAt: new Date() },
+        create: { userId, productId },
+      });
+    } catch (error) {
+      this.logger.error(`HISTORY_RECORD_ERROR: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * 📂 GET USER HISTORY
+   * Optimized to fetch only necessary UI artifacts.
+   */
+  async getHistory(userId: string) {
+    return this.prisma.browsingHistory.findMany({
+      where: { userId },
+      include: {
+        product: {
+          select: {
+            id: true,
+            title: true,
+            price: true,
+            images: {
+              take: 1, // Only need the first image for history cards
+              select: { imageUrl: true }
+            },
+          },
+        },
+      },
+      orderBy: { viewedAt: 'desc' },
+      take: 30, // Firm limit: keeps the dashboard fast and clean
+    });
+  }
+
+  /**
+   * 🗑️ CLEAR REGISTRY
+   */
+  async clearHistory(userId: string) {
+    try {
+      return await this.prisma.browsingHistory.deleteMany({
+        where: { userId },
+      });
+    } catch (error) {
+      this.logger.error(`HISTORY_CLEAR_ERROR: ${error.message}`);
+      throw new Error("Failed to clear browsing registry.");
+    }
+  }
 
 
 async getFollowedVendors(userId: string) {
