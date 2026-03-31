@@ -346,18 +346,46 @@ async getAddresses(userId: string) {
 }
 
 async addAddress(userId: string, data: CreateAddressDto) {
-  const count = await this.prisma.address.count({ where: { userId } });
-  
-  return this.prisma.address.create({
+  try {
+    const count = await this.prisma.address.count({ where: { userId } });
+    
+    return await this.prisma.address.create({
+      data: {
+        fullName: data.fullName,
+        phoneNumber: data.phoneNumber,
+        street: data.street,
+        city: data.city,
+        state: data.state,
+        postalCode: data.postalCode || "", // Ensures it's never null
+        userId: userId,
+        isDefault: count === 0, // First one is default
+      },
+    });
+  } catch (error) {
+    throw new BadRequestException("LOGISTICS_REGISTRY_FAILURE: Check identity fields.");
+  }
+}
+
+async updateAddress(userId: string, addressId: string, data: CreateAddressDto) {
+  // Use findFirst to ensure the address actually belongs to the user before updating
+  const address = await this.prisma.address.findFirst({
+    where: { id: addressId, userId }
+  });
+
+  if (!address) throw new NotFoundException("Address node not found in your registry.");
+
+  return await this.prisma.address.update({
+    where: { id: addressId },
     data: {
-      ...data,
-      postalCode: data.postalCode ?? "", // Matches your requirement to force a string
-      userId,
-      isDefault: count === 0, // First address is always the default
+      fullName: data.fullName,
+      phoneNumber: data.phoneNumber,
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode || "",
     },
   });
 }
-
 async setDefaultAddress(userId: string, addressId: string) {
   return await this.prisma.$transaction(async (tx) => {
     // 1. Reset all to false
@@ -376,18 +404,7 @@ async setDefaultAddress(userId: string, addressId: string) {
 
 // Add this to your UsersService
 // Add this to your UsersService
-async updateAddress(userId: string, addressId: string, data: CreateAddressDto) {
-  return this.prisma.address.update({
-    where: { 
-      id: addressId, 
-      userId // Security: User can only edit their own address
-    },
-    data: {
-      ...data,
-      postalCode: data.postalCode ?? "", // Keeping your string requirement
-    },
-  });
-}
+
 
 async deleteAddress(userId: string, addressId: string) {
   const addressToDelete = await this.prisma.address.findUnique({
