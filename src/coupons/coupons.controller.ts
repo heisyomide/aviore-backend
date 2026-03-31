@@ -54,6 +54,13 @@ export class CouponController {
     return this.couponService.getCampaignsOverview();
   }
 
+  @Get('active')
+  @UseGuards(JwtAuthGuard)
+  async getActive() {
+    return this.couponService.getActiveCoupons();
+  }
+
+
   // =========================================================
   // VENDOR MARKETING HUB
   // =========================================================

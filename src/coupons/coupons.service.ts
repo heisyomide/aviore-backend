@@ -162,6 +162,79 @@ async participateInCampaign(campaignId: string, productIds: string[], userId: st
     });
   }
 
+  async getActiveCoupons() {
+    const now = new Date();
+
+    try {
+      return await this.prisma.coupon.findMany({
+        where: {
+          isActive: true,
+          // 🛡️ Time Protocol: Must be currently running
+          startDate: { lte: now },
+          endDate: { gte: now },
+          // 🛡️ Inventory Protocol: Only show if codes are still available
+          // This uses a Prisma 'filter' to compare usedCount against usageLimit
+          AND: [
+            {
+              OR: [
+                { usageLimit: 0 }, // 0 could mean unlimited in some systems, adjust if needed
+                { usageLimit: { gt: this.prisma.coupon.fields.usedCount } } 
+              ]
+            }
+          ]
+        },
+        include: {
+          // Include vendor name so mobile shows "Vendor_Specific" badge
+          vendor: {
+            select: {
+              storeName: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+    } catch (error) {
+      this.logger.error(`COUPON_SYNC_FAILURE: ${error.message}`);
+      throw new BadRequestException("PROTOCOL_ERROR: Failed to sync artifact rewards.");
+    }
+  }
+
+  /**
+   * 🔍 VALIDATE & CLAIM
+   * Called when a user enters a code at Checkout.
+   */
+  async validateCoupon(code: string, userId: string) {
+    const now = new Date();
+    
+    const coupon = await this.prisma.coupon.findUnique({
+      where: { code: code.toUpperCase() },
+      include: { orders: { where: { userId } } } // Check if this specific user used it
+    });
+
+    if (!coupon || !coupon.isActive) {
+      throw new NotFoundException("INVALID_PROTOCOL: Code not found in registry.");
+    }
+
+    if (now < coupon.startDate || now > coupon.endDate) {
+      throw new BadRequestException("EXPIRED_NODE: Reward window has closed.");
+    }
+
+    if (coupon.usedCount >= coupon.usageLimit) {
+      throw new BadRequestException("LIMIT_REACHED: Global usage limit exceeded.");
+    }
+
+    // Check Per-User Limit
+    const userUsageCount = coupon.orders.length;
+    if (userUsageCount >= coupon.perUserLimit) {
+      throw new BadRequestException("USER_LIMIT: You have already claimed this artifact.");
+    }
+
+    return coupon;
+  }
+
+
 
 
   // backend: src/coupons/coupons.service.ts
@@ -406,6 +479,9 @@ async withdrawArtifactFromCampaign(campaignId: string, productId: string, userId
       activeCoupons: coupons.filter(c => c.isActive && new Date(c.endDate) > new Date()).length
     };
   }
+
+
+  
 
   async validateCouponForUser(code: string, userId: string, orderValue: number) {
     const coupon = await this.prisma.coupon.findUnique({
