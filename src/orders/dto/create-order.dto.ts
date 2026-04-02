@@ -13,31 +13,34 @@ import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 // --- SUB-DTO: INDIVIDUAL CAMPAIGN LOG ---
-class AppliedCampaignDto {
+export class AppliedCampaignDto {
   @ApiProperty({ example: 'Summer Sale 2024' })
   @IsString()
   @IsNotEmpty()
   title: string;
 
   @ApiProperty({ example: 2500 })
+  @Type(() => Number) // 🛡️ Ensure string "2500" becomes number 2500
   @IsNumber()
   @Min(0)
   amount: number;
 }
 
 // --- SUB-DTO: ORDER ITEM ---
-class OrderItemDto {
+export class OrderItemDto {
   @ApiProperty({ example: 'uuid-v4-product-id' })
   @IsUUID()
   @IsNotEmpty()
   productId: string;
 
   @ApiProperty({ example: 2 })
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   quantity: number;
 
   @ApiProperty({ example: 15000 })
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   price: number; 
@@ -79,16 +82,19 @@ export class CreateOrderDto {
   couponId?: string;
 
   @ApiProperty({ example: 50000 })
+  @Type(() => Number) // 🛡️ Fixes the "subtotal must be a number" error
   @IsNumber()
   @Min(0)
   subtotal: number;
 
   @ApiProperty({ example: 5000 })
+  @Type(() => Number) // 🛡️ Fixes the "discount must be a number" error
   @IsNumber()
   @Min(0)
   discount: number;
 
   @ApiProperty({ example: 45000 })
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   totalAmount: number;

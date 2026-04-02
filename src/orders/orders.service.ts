@@ -22,7 +22,7 @@ export class OrdersService {
   ) {}
 
 async create(createOrderDto: CreateOrderDto, userId: string) {
-  // 1. IDENTITY_CHECK: Validate the initiating node
+  // 1. IDENTITY_CHECK
   const user = await this.prisma.user.findUnique({
     where: { id: userId },
     select: { email: true, firstName: true },
@@ -31,10 +31,11 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
   if (!user) throw new NotFoundException('USER_PROTOCOL: Registry node not found');
 
   // 2. ATOMIC_TRANSACTION_BLOCK
-  const order = await this.prisma.$transaction(async (tx) => {
+  return await this.prisma.$transaction(async (tx) => {
+    let calculatedSubtotal = 0;
     let orderVendorId: string | null = null;
 
-    // A. ARTIFACT_VALIDATION
+    // A. ARTIFACT_VALIDATION & VALUATION
     const itemsWithDetails = await Promise.all(
       createOrderDto.items.map(async (item) => {
         const product = await tx.product.findUnique({
@@ -49,8 +50,11 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
           throw new BadRequestException(`INSUFFICIENT_STOCK: ${product.title}`);
         }
 
-        // Establish the fulfilling vendor node from the primary artifact
+        // Set the vendor from the first product in the selection
         if (!orderVendorId) orderVendorId = product.vendorId;
+
+        const itemTotal = Number(product.price) * item.quantity;
+        calculatedSubtotal += itemTotal;
 
         return {
           productId: product.id,
@@ -62,16 +66,19 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
 
     if (!orderVendorId) throw new BadRequestException('FULFILLMENT_ERROR: Vendor node ambiguous');
 
-    // B. REGISTRY_INITIALIZATION
-    const createdOrder = await tx.order.create({
+    // B. APPLY CAMPAIGNS / DISCOUNTS (Firm Backend Calculation)
+    const totalDiscount = createOrderDto.appliedCampaigns?.reduce((sum, camp) => sum + camp.amount, 0) || 0;
+    const finalAuthorizedAmount = Math.max(0, calculatedSubtotal - totalDiscount);
+
+    // C. REGISTRY_INITIALIZATION
+    const order = await tx.order.create({
       data: {
         userId,
         addressId: createOrderDto.addressId,
         vendorId: orderVendorId,
         status: 'PENDING',
-        totalAmount: createOrderDto.totalAmount, // Authorized Valuation
+        totalAmount: finalAuthorizedAmount, // 🛡️ Recalculated locally, not just trusted from DTO
         
-        // AUDIT_LOGS: Persist "Summer Sales" etc. as immutable records
         campaignLogs: {
           create: createOrderDto.appliedCampaigns?.map(camp => ({
             title: camp.title,
@@ -90,7 +97,7 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
       include: { items: true, campaignLogs: true },
     });
 
-    // C. INVENTORY_DECREMENT: Lock stock immediately within the transaction
+    // D. INVENTORY_DECREMENT
     await Promise.all(
       itemsWithDetails.map(item =>
         tx.product.update({
@@ -100,39 +107,38 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
       )
     );
 
-    return createdOrder;
+    // E. SETTLEMENT_GATEWAY_HANDSHAKE
+    try {
+      const paymentData = await this.paymentsService.initializePayment(
+        order.id,
+        user.email,
+        user.firstName || 'Customer'
+      );
+
+      return {
+        success: true,
+        message: 'TRANSACTION_AUTHORIZED',
+        data: {
+          orderId: order.id,
+          paymentLink: paymentData.link,
+          valuation: order.totalAmount,
+        },
+      };
+    } catch (error) {
+      // ⚠️ Transaction is still committed; user can pay later
+      return {
+        success: true,
+        message: 'ORDER_LOCKED_SETTLEMENT_RETRY_REQUIRED',
+        data: {
+          orderId: order.id,
+          paymentLink: null,
+        },
+      };
+    }
+  }, {
+    timeout: 10000, // 10s timeout for complex order blocks
   });
-
-  // 3. SETTLEMENT_GATEWAY_HANDSHAKE
-  try {
-    const paymentData = await this.paymentsService.initializePayment(
-      order.id,
-      user.email,
-      user.firstName || 'Customer'
-    );
-
-    return {
-      success: true,
-      message: 'TRANSACTION_AUTHORIZED',
-      data: {
-        orderId: order.id,
-        paymentLink: paymentData.link,
-        valuation: order.totalAmount,
-      },
-    };
-  } catch (error) {
-    // Note: Inventory is already locked; user can re-try payment via dashboard
-    return {
-      success: true,
-      message: 'ORDER_LOCKED_SETTLEMENT_RETRY_REQUIRED',
-      data: {
-        orderId: order.id,
-        paymentLink: null,
-      },
-    };
-  }
 }
-
   /**
    * FIND_USER_ORDERS
    * Retrieves full manifest of history with nested artifacts.

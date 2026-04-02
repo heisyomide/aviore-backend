@@ -644,9 +644,10 @@ async findPublicVendors(params: {
   const { isVerified, limit = 6, search = '' } = params;
 
   // 🛡️ FIRM FILTER LOGIC: 
-  // If isVerified is undefined, we don't pass the key to Prisma at all.
+  // 1. Swapped 'isActive' for 'status' to match your schema.
+  // 2. Ensuring 'isVerified' is only added if explicitly requested.
   const whereClause: any = {
-    isActive: true, // Only show active business nodes
+    status: 'ACTIVE', 
     ...(isVerified !== undefined && { isVerified }), 
     ...(search && {
       OR: [
@@ -656,30 +657,36 @@ async findPublicVendors(params: {
     }),
   };
 
-  const vendors = await this.prisma.vendor.findMany({
-    where: whereClause,
-    take: limit,
-    select: {
-      id: true,
-      storeName: true,
-      isVerified: true,
-      idImage: true, // Standard field for "idImage" or profile
-      description: true,
-      _count: {
-        select: { 
-          products: true,
-          followers: true 
+  try {
+    const vendors = await this.prisma.vendor.findMany({
+      where: whereClause,
+      take: limit,
+      select: {
+        id: true,
+        storeName: true,
+        isVerified: true,
+        idImage: true,      // Using idImage as per your schema
+        imageUrl: true,     // Included imageUrl as it exists in your schema
+        description: true,
+        _count: {
+          select: { 
+            products: true,
+            followers: true 
+          }
         }
-      }
-    },
-    orderBy: { createdAt: 'desc' }
-  });
+      },
+      orderBy: { createdAt: 'desc' }
+    });
 
-  return { 
-    status: 'SUCCESS',
-    count: vendors.length,
-    data: vendors 
-  };
+    return { 
+      status: 'SUCCESS',
+      count: vendors.length,
+      data: vendors 
+    };
+  } catch (error) {
+    console.error("VENDOR_QUERY_FAILURE", error);
+    throw new Error("Failed to retrieve public vendor registry.");
+  }
 }
 // src/vendor/vendor.service.ts
 

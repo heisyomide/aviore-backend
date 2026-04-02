@@ -6,20 +6,28 @@ export class CartService {
   private readonly logger = new Logger(CartService.name);
   constructor(private prisma: PrismaService) {}
 
-  async getCart(userId: string) {
-    // 🛡️ Ensure the cart exists and return it with products
-    return this.prisma.cart.upsert({
-      where: { userId },
-      update: {},
-      create: { userId },
-      include: { 
-        items: { 
-          include: { product: true },
-          orderBy: { createdAt: 'asc' } // Keep item order firm
-        } 
-      },
-    });
-  }
+async getCart(userId: string) {
+  // 🛡️ Enhanced Sync: Fetching products WITH their image registry
+  return this.prisma.cart.upsert({
+    where: { userId },
+    update: {},
+    create: { userId },
+    include: { 
+      items: { 
+        include: { 
+          product: {
+            include: {
+              // 🖼️ CRITICAL: Replace 'images' with the actual field name 
+              // in your Product model (e.g., productImages, gallery, etc.)
+              images: true 
+            }
+          } 
+        },
+        orderBy: { createdAt: 'asc' }
+      } 
+    },
+  });
+}
 
   async addItem(userId: string, productId: string, quantity: number) {
     const cart = await this.getCart(userId);
