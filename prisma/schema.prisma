@@ -420,20 +420,28 @@ enum OrderStatus {
 
 model Cart {
   id        String     @id @default(uuid())
-  userId    String     @unique
+  userId    String     @unique    // 🛡️ Strictly one cart per user
   user      User       @relation(fields: [userId], references: [id])
-  items     CartItem[]
+  items     CartItem[]            // 🛡️ Relation to the items inside
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 }
 
+
 model CartItem {
-  id        String  @id @default(uuid())
+  id        String   @id @default(cuid())
   cartId    String
-  cart      Cart    @relation(fields: [cartId], references: [id])
   productId String
-  product   Product @relation(fields: [productId], references: [id])
-  quantity  Int     @default(1)
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id])
+
+  // 🛡️ CRITICAL LOCK: This stops the duplicate quantity glitch
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@index([productId])
 }
 
 // Add this to your schema.prisma
