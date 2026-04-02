@@ -384,18 +384,25 @@ async getReturnRequests(@Request() req: any) {
     return this.vendorService.triggerReturnMediation(returnId, vendorId, reason);
   }
 
-  @Get()
-  async getPublicVendors(
-    @Query('isVerified') isVerified?: string,
-    @Query('limit') limit?: string,
-  ) {
-    // We convert the string query params to actual types
-    return this.vendorService.findPublicVendors({
-      isVerified: isVerified === 'true',
-      limit: limit ? parseInt(limit) : 6,
-    });
-  }
+@Get()
+async getPublicVendors(
+  @Query('isVerified') isVerified?: string,
+  @Query('limit') limit?: string,
+  @Query('search') search?: string,
+) {
+  // 🛰️ LOGIC CONVERSION
+  // If isVerified is missing from URL, it remains undefined.
+  // If it's "true", it becomes true. Otherwise, it becomes false.
+  const verifiedFilter = isVerified === undefined 
+    ? undefined 
+    : isVerified === 'true';
 
+  return this.vendorService.findPublicVendors({
+    isVerified: verifiedFilter,
+    limit: limit ? parseInt(limit, 10) : 6,
+    search: search || '',
+  });
+}
 
 
   @Get('reviews')

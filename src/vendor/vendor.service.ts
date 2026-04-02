@@ -636,25 +636,50 @@ async updateFullProfile(vendorId: string, data: {
 
   // src/vendor/vendor.service.ts
 
-async findPublicVendors(params: { isVerified?: boolean; limit?: number }) {
+async findPublicVendors(params: { 
+  isVerified?: boolean; 
+  limit?: number; 
+  search?: string 
+}) {
+  const { isVerified, limit = 6, search = '' } = params;
+
+  // 🛡️ FIRM FILTER LOGIC: 
+  // If isVerified is undefined, we don't pass the key to Prisma at all.
+  const whereClause: any = {
+    isActive: true, // Only show active business nodes
+    ...(isVerified !== undefined && { isVerified }), 
+    ...(search && {
+      OR: [
+        { storeName: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ],
+    }),
+  };
+
   const vendors = await this.prisma.vendor.findMany({
-    where: {
-      // Only show vendors that are actually verified (adjust field name to your schema)
-      isVerified: params.isVerified ?? true, 
-    },
-    take: params.limit || 6,
+    where: whereClause,
+    take: limit,
     select: {
       id: true,
       storeName: true,
-      idImage: true, // or image
+      isVerified: true,
+      idImage: true, // Standard field for "idImage" or profile
       description: true,
       _count: {
-        select: { products: true } // Show how many artifacts they have
+        select: { 
+          products: true,
+          followers: true 
+        }
       }
-    }
+    },
+    orderBy: { createdAt: 'desc' }
   });
 
-  return { data: vendors };
+  return { 
+    status: 'SUCCESS',
+    count: vendors.length,
+    data: vendors 
+  };
 }
 // src/vendor/vendor.service.ts
 
