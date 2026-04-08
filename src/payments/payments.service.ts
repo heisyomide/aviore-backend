@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { OrderStatus, PaymentStatus } from '@prisma/client';
+import  axios from 'axios';
 
 // Better practice: Use a modern import or a specific type definition for the SDK
 const Flutterwave = require('flutterwave-node-v3');
@@ -42,54 +43,80 @@ export class PaymentsService implements OnModuleInit {
    * INITIALIZE_TRANSACTION
    * Logic for generating checkout sessions with price-tamper protection.
    */
-  async initializePayment(orderId: string, email: string, name: string) {
-    if (!this.flw) throw new InternalServerErrorException('GATEWAY_OFFLINE');
+ 
 
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: { vendor: true }
+async initializePayment(orderId: string, email: string, name: string) {
+  const order = await this.prisma.order.findUnique({
+    where: { id: orderId },
+    include: { vendor: true },
+  });
+
+  if (!order) {
+    throw new NotFoundException('ORDER_NOT_FOUND');
+  }
+
+  const txRef = `AVR-${order.id.slice(-6).toUpperCase()}-${Date.now()}`;
+
+  const payload = {
+    tx_ref: txRef,
+    amount: Number(order.totalAmount),
+    currency: 'NGN',
+    redirect_url: `${process.env.FRONTEND_URL}/orders/confirmation`,
+    customer: {
+      email,
+      name,
+    },
+    customizations: {
+      title: 'Aviore Luxury Registry',
+      description: `Order #${order.id.slice(-6).toUpperCase()}`,
+    },
+  };
+
+  try {
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/payments',
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      },
+    );
+
+    const paymentLink = response.data?.data?.link;
+
+    if (!paymentLink) {
+      throw new Error('PAYMENT_LINK_MISSING');
+    }
+
+    await this.prisma.payment.upsert({
+      where: { orderId: order.id },
+      update: {
+        reference: txRef,
+        status: PaymentStatus.PENDING,
+      },
+      create: {
+        orderId: order.id,
+        reference: txRef,
+        status: PaymentStatus.PENDING,
+        provider: 'FLUTTERWAVE',
+      },
     });
 
-    if (!order) throw new NotFoundException('ORDER_NOT_FOUND: Registry entry missing');
-
-    // tx_ref structure: AVR-{SHORT_UUID}-{TIMESTAMP} for uniqueness
-    const txRef = `AVR-${order.id.slice(-6).toUpperCase()}-${Date.now()}`;
-
-    const payload = {
-      tx_ref: txRef,
-      amount: Number(order.totalAmount),
-      currency: 'NGN',
-      redirect_url: `${process.env.FRONTEND_URL}/orders/confirmation`,
-      customer: { email, name },
-      customizations: {
-        title: 'Aviore Luxury Registry',
-        description: `Artifact Acquisition Protocol: #${order.id.slice(-6).toUpperCase()}`,
-        logo: 'https://aviore.com/luxury-logo.png'
-      },
+    return {
+      link: paymentLink,
     };
+  } catch (error: any) {
+    this.logger.error(
+      `PAYMENT_INIT_FAILED: ${error.response?.data?.message || error.message}`,
+    );
 
-    try {
-      const response = await this.flw.Transaction.initialize(payload);
-      if (response.status !== 'success') throw new Error(response.message);
-
-      // DEFENSIVE_UPSERT: Atomic update of payment intent
-      await this.prisma.payment.upsert({
-        where: { orderId: order.id },
-        update: { reference: txRef, status: PaymentStatus.PENDING },
-        create: {
-          orderId: order.id,
-          reference: txRef,
-          status: PaymentStatus.PENDING,
-          provider: 'FLUTTERWAVE',
-        },
-      });
-
-      return { link: response.data.link };
-    } catch (error) {
-      this.logger.error(`❌ INIT_ERROR: ${error.message}`);
-      throw new InternalServerErrorException('PAYMENT_HANDSHAKE_FAILED');
-    }
+    throw new InternalServerErrorException(
+      'PAYMENT_HANDSHAKE_FAILED',
+    );
   }
+}
 
   /**
    * WEBHOOK_FINALIZATION_PROTOCOL
