@@ -134,35 +134,37 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
   );
 
   // 5. INITIALIZE PAYMENT OUTSIDE TRANSACTION
-  try {
-    const paymentData =
-      await this.paymentsService.initializePayment(
-        order.id,
-        user.email,
-        user.firstName || 'Customer',
-      );
+// orders.service.ts
 
-    return {
-      success: true,
-      message: 'TRANSACTION_AUTHORIZED',
-      data: {
-        orderId: order.id,
-        paymentLink: paymentData.link,
-        valuation: order.totalAmount,
-      },
-    };
-  } catch (error) {
-    return {
-      success: true,
-      message:
-        'ORDER_CREATED_PAYMENT_INITIALIZATION_FAILED',
-      data: {
-        orderId: order.id,
-        paymentLink: null,
-        valuation: order.totalAmount,
-      },
-    };
-  }
+try {
+  const paymentData = await this.paymentsService.initializePayment(
+    order.id,
+    user.email,
+    user.firstName || 'Customer',
+  );
+
+  return {
+    success: true,
+    message: 'TRANSACTION_AUTHORIZED',
+    data: {
+      orderId: order.id,
+      paymentLink: paymentData.link, // 🛡️ This is the link we need
+      valuation: order.totalAmount,
+    },
+  };
+} catch (error) {
+  // 🛡️ Log the actual error to your Render terminal so you can see it!
+  console.error("PAYMENT_LINK_GEN_FAILED:", error.message);
+
+  return {
+    success: false, // 🚨 CHANGE THIS TO FALSE
+    message: 'PAYMENT_GATEWAY_UNREACHABLE',
+    data: {
+      orderId: order.id,
+      paymentLink: null,
+    },
+  };
+}
 }
   /**
    * FIND_USER_ORDERS
