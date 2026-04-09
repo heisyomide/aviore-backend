@@ -420,13 +420,12 @@ enum OrderStatus {
 
 model Cart {
   id        String     @id @default(uuid())
-  userId    String     @unique    // 🛡️ Strictly one cart per user
+  userId    String     @unique // 🛡️ Strictly one cart per user
   user      User       @relation(fields: [userId], references: [id])
-  items     CartItem[]            // 🛡️ Relation to the items inside
+  items     CartItem[] // 🛡️ Relation to the items inside
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 }
-
 
 model CartItem {
   id        String   @id @default(cuid())
@@ -435,8 +434,8 @@ model CartItem {
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
 
-  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  product   Product  @relation(fields: [productId], references: [id])
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
 
   // 🛡️ CRITICAL LOCK: This stops the duplicate quantity glitch
   @@unique([cartId, productId])
