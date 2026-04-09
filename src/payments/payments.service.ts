@@ -231,23 +231,32 @@ async handleWebhook(signature: string, payload: any) {
  * 💰 FRAGMENTATION_PROTOCOL
  * Splits order revenue into Platform Commission and Vendor Escrow (Locked)
  */
+// payments.service.ts
+
 private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
   for (const item of items) {
-    const grossAmount = Number(item.priceAtPurchase) * item.quantity;
+    // 🛡️ Guard: Ensure we have a valid price to do math with
+    const price = Number(item.priceAtPurchase || 0);
+    if (price <= 0) {
+      this.logger.error(`CRITICAL_MATH_ERROR: Item ${item.id} has 0 price. Skipping settlement.`);
+      continue;
+    }
+
+    const grossAmount = price * item.quantity;
     const commission = grossAmount * this.COMMISSION_RATE;
     const vendorEarning = grossAmount - commission;
 
-    // A. Update Item Record
+    // 1. Update Order Item Registry (Fill the NULLS)
     await tx.orderItem.update({
       where: { id: item.id },
       data: {
-        commission,
-        vendorEarning,
-        payoutStatus: 'LOCKED', // Money held in escrow until order COMPLETED
+        commission: commission,
+        vendorEarning: vendorEarning,
+        payoutStatus: 'LOCKED', // This moves it from PENDING to ESCROW
       },
     });
 
-    // B. Update Vendor Wallet (In Escrow)
+    // 2. Move money into Vendor's Pending Balance
     await tx.vendorWallet.upsert({
       where: { vendorId: item.product.vendorId },
       update: {
@@ -262,11 +271,7 @@ private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
       },
     });
 
-    // C. Decrement Inventory Registry
-    await tx.product.update({
-      where: { id: item.productId },
-      data: { stock: { decrement: item.quantity } },
-    });
+    this.logger.log(`💰 ESCROW_LOCKED: Vendor ${item.product.vendorId} - Amount: ₦${vendorEarning}`);
   }
 }
 
