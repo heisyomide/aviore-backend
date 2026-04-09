@@ -15,7 +15,8 @@ export class AdminService {
   // DASHBOARD OVERVIEW
   // =========================================================
 
-  async getAdminDashboardOverview() {
+async getAdminDashboardOverview() {
+    // We use 'month' as the default range for the revenue summary cards
     const [
       performance,
       revenue,
@@ -1066,69 +1067,74 @@ async getPendingWithdrawals() {
   // ANALYTICS
   // =========================================================
 
-  async calculateRevenueStats(range: string = 'month') {
+async calculateRevenueStats(range: string = 'month') {
     const now = new Date();
-    let startDate: Date;
+    
+    // 🛡️ Fix TS2454: Initialize with a default value immediately
+    let startDate = new Date(0); 
 
-    switch (range) {
-      case 'today':
-        startDate = startOfDay(now);
-        break;
-      case 'week':
-        startDate = subDays(now, 7);
-        break;
-      case 'month':
-        startDate = startOfMonth(now);
-        break;
-      default:
-        startDate = new Date(0);
-    }
+    if (range === 'today') startDate = startOfDay(now);
+    else if (range === 'week') startDate = subDays(now, 7);
+    else if (range === 'month') startDate = startOfMonth(now);
 
+    // 📊 REVENUE_AGGREGATION_PROTOCOL
     const stats = await this.prisma.order.aggregate({
       where: {
-        status: OrderStatus.PAID,
+        // ✅ CRITICAL: Include both PAID (shipping) and COMPLETED (delivered)
+        status: {
+          in: [OrderStatus.PAID, OrderStatus.COMPLETED]
+        },
         createdAt: { gte: startDate }
       },
-      _sum: { totalAmount: true },
-      _count: true
+      // ✅ Use totalPaid: This represents actual money confirmed in system
+      _sum: { totalPaid: true },
+      _count: { id: true }
     });
 
-    const revenue = Number(stats._sum.totalAmount ?? 0);
+    const revenue = Number(stats._sum.totalPaid ?? 0);
+    const orderCount = stats._count.id ?? 0;
 
     return {
       revenue,
-      orders: stats._count,
-      commission: revenue * 0.1
+      orders: orderCount,
+      commission: revenue * 0.10 // Platform's 10% share
     };
   }
 
   async getRevenueChartData() {
-    const start = startOfDay(subDays(new Date(), 6));
+    const last7Days = subDays(new Date(), 7);
 
+    // 🛡️ Ensure the chart also pulls COMPLETED orders
     const orders = await this.prisma.order.findMany({
       where: {
-        status: OrderStatus.PAID,
-        createdAt: { gte: start }
+        status: { in: [OrderStatus.PAID, OrderStatus.COMPLETED] },
+        createdAt: { gte: last7Days }
       },
       select: {
-        totalAmount: true,
+        totalPaid: true,
         createdAt: true
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    // Grouping logic for the frontend chart
+    const chartMap = new Map();
+    
+    // Initialize last 7 days with 0
+    for (let i = 6; i >= 0; i--) {
+      const date = subDays(new Date(), i).toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+      chartMap.set(date, 0);
+    }
+
+    // Fill with real data
+    orders.forEach(order => {
+      const date = order.createdAt.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+      if (chartMap.has(date)) {
+        chartMap.set(date, chartMap.get(date) + Number(order.totalPaid || 0));
       }
     });
 
-    const days = Array.from({ length: 7 }, (_, i) =>
-      subDays(new Date(), i)
-    ).reverse();
-
-    return days.map((d) => {
-      const label = format(d, 'MMM dd');
-
-      const total = orders
-        .filter((o) => format(o.createdAt, 'MMM dd') === label)
-        .reduce((sum, o) => sum + Number(o.totalAmount), 0);
-
-      return { date: label, amount: total };
-    });
+    return Array.from(chartMap, ([date, amount]) => ({ date, amount }));
   }
 
   // =========================================================

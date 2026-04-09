@@ -258,57 +258,57 @@ async findByVendor(userId: string, campaignId?: string) {
 
 async addReview(productId: string, userId: string, dto: { rating: number; comment: string }) {
   return this.prisma.$transaction(async (tx) => {
-    // 1. Verify Purchase and get Vendor Node
+    // 1. VERIFIED_PURCHASE_PROTOCOL
+    // We check for DELIVERED or COMPLETED to ensure the user actually has the artifact
     const purchaseNode = await tx.order.findFirst({
       where: {
         userId,
-        status: 'DELIVERED',
+        status: { in: ['DELIVERED', 'COMPLETED'] }, // ✅ Fixed the blocking status
         items: { some: { productId } }
       },
       select: { vendorId: true }
     });
 
     if (!purchaseNode || !purchaseNode.vendorId) {
-      throw new ForbiddenException('Review_Denied: No verified delivery record found');
+      throw new ForbiddenException('Review_Denied: No verified delivery record found for this user/product pairing');
     }
 
-    // 2. Duplicate Check 
-    // If @@unique isn't in schema yet, use findFirst. 
-    // If it IS in schema, use findUnique with the composite key.
+    // 2. IDEMPOTENCY_CHECK
+    // Prevents "Review Spamming" (1 review per artifact per user)
     const alreadyEvaluated = await tx.review.findFirst({
       where: { productId, userId }
     });
 
     if (alreadyEvaluated) {
-      throw new BadRequestException('Evaluation_Logged: You have already reviewed this artifact');
+      throw new BadRequestException('Evaluation_Logged: This artifact has already been evaluated by your node');
     }
 
-    // 3. Log Review Entry
+    // 3. REGISTRY_ENTRY
     const review = await tx.review.create({
       data: {
         rating: dto.rating,
         comment: dto.comment,
         productId,
         userId,
-        vendorId: purchaseNode.vendorId, // guaranteed string by check above
+        vendorId: purchaseNode.vendorId, 
       },
     });
 
-    // 4. Atomic Aggregation
+    // 4. SCORE_AGGREGATION_ENGINE
     const stats = await tx.review.aggregate({
       where: { productId },
       _avg: { rating: true },
       _count: { rating: true },
     });
 
-    // 5. Sync Artifact Score
-    // Using 'as any' temporarily if you haven't run prisma generate yet
+    // 5. ARTIFACT_SCORE_SYNC
+    // Updates the product record so the storefront doesn't have to calculate averages on every load
     await tx.product.update({
       where: { id: productId },
       data: {
         averageRating: stats._avg.rating ? parseFloat(stats._avg.rating.toFixed(1)) : 0,
         reviewCount: stats._count.rating,
-      } as any, 
+      },
     });
 
     return review;
