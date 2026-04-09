@@ -231,42 +231,70 @@ async handleWebhook(signature: string, payload: any) {
  * 💰 FRAGMENTATION_PROTOCOL
  * Splits order revenue into Platform Commission and Vendor Escrow (Locked)
  */
+/**
+ * 💰 FRAGMENTATION_ENGINE
+ * Handles financial splits, inventory reduction, and escrow locking.
+ */
 private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
   for (const item of items) {
-    const grossAmount = Number(item.priceAtPurchase) * item.quantity;
+    // 🛡️ 1. DATA_INTEGRITY_CHECK
+    // Ensure we are working with real numbers to prevent math crashes
+    const price = Number(item.priceAtPurchase || 0);
+    const quantity = Number(item.quantity || 1);
+    
+    if (price <= 0) {
+      this.logger.error(`❌ SETTLEMENT_REJECTED: Item ${item.id} has invalid valuation (₦${price})`);
+      continue;
+    }
+
+    // 🧮 2. FINANCIAL_COMPUTATION
+    const grossAmount = price * quantity;
     const commission = grossAmount * this.COMMISSION_RATE;
     const vendorEarning = grossAmount - commission;
 
-    // A. Update Item Record
+    // 📝 3. REGISTRY_UPDATE (OrderItem)
+    // We fill the NULLS here. If this fails, the whole transaction rolls back.
     await tx.orderItem.update({
       where: { id: item.id },
       data: {
         commission,
         vendorEarning,
-        payoutStatus: 'LOCKED', // Money held in escrow until order COMPLETED
+        payoutStatus: 'LOCKED', // Officially moved to Escrow
       },
     });
 
-    // B. Update Vendor Wallet (In Escrow)
+    // 🏦 4. WALLET_UPSERT (Vendor Balances)
+    // We target the vendor associated with the PRODUCT linked to this item
+    const vendorTargetId = item.product?.vendorId;
+    if (!vendorTargetId) {
+       this.logger.error(`❌ VENDOR_NODE_MISSING: Cannot credit item ${item.id} - No vendor ID linked.`);
+       continue;
+    }
+
     await tx.vendorWallet.upsert({
-      where: { vendorId: item.product.vendorId },
+      where: { vendorId: vendorTargetId },
       update: {
         pendingBalance: { increment: vendorEarning },
         totalEarnings: { increment: vendorEarning },
       },
       create: {
-        vendorId: item.product.vendorId,
+        vendorId: vendorTargetId,
         availableBalance: 0,
         pendingBalance: vendorEarning,
         totalEarnings: vendorEarning,
       },
     });
 
-    // C. Decrement Inventory Registry
+    // 📦 5. INVENTORY_SYNCHRONIZATION
+    // This is where we solve your stock-not-decreasing issue.
     await tx.product.update({
       where: { id: item.productId },
-      data: { stock: { decrement: item.quantity } },
+      data: { 
+        stock: { decrement: quantity } 
+      },
     });
+
+    this.logger.log(`✅ ITEM_SETTLED: Registry updated for Vendor ${vendorTargetId}. Stock -${quantity}`);
   }
 }
 

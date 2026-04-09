@@ -93,45 +93,57 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
   );
 
   // 4. CREATE ORDER INSIDE TRANSACTION
-  const order = await this.prisma.$transaction(
-    async (tx) => {
-      return tx.order.create({
-        data: {
-          userId,
-          addressId: createOrderDto.addressId,
-          vendorId: orderVendorId!,
-          status: 'PENDING',
-          totalAmount: finalAuthorizedAmount,
+  // 4. CREATE ORDER INSIDE TRANSACTION
+const order = await this.prisma.$transaction(
+  async (tx) => {
+    // A. Create the Order (Your existing code)
+    const newOrder = await tx.order.create({
+      data: {
+        userId,
+        addressId: createOrderDto.addressId,
+        vendorId: orderVendorId!,
+        status: 'PENDING',
+        totalAmount: finalAuthorizedAmount,
 
-          campaignLogs: {
-            create:
-              createOrderDto.appliedCampaigns?.map(
-                (camp) => ({
-                  title: camp.title,
-                  discountAmount: camp.amount,
-                }),
-              ) || [],
-          },
+        campaignLogs: {
+          create:
+            createOrderDto.appliedCampaigns?.map((camp) => ({
+              title: camp.title,
+              discountAmount: camp.amount,
+            })) || [],
+        },
 
-          items: {
-            create: itemsWithDetails.map((item) => ({
-              productId: item.productId,
-              quantity: item.quantity,
-              priceAtPurchase:
-                item.priceAtPurchase,
-            })),
-          },
+        items: {
+          create: itemsWithDetails.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            priceAtPurchase: item.priceAtPurchase,
+          })),
         },
-        include: {
-          items: true,
-          campaignLogs: true,
+      },
+      include: {
+        items: true,
+        campaignLogs: true,
+      },
+    });
+
+    // 🛡️ B. KILL THE GHOST CART HERE
+    // This wipes all items from the user's cart in the DB 
+    // immediately after the order is created.
+    await tx.cartItem.deleteMany({
+      where: {
+        cart: {
+          userId: userId,
         },
-      });
-    },
-    {
-      timeout: 10000,
-    },
-  );
+      },
+    });
+
+    return newOrder;
+  },
+  {
+    timeout: 10000,
+  },
+);
 
   // 5. INITIALIZE PAYMENT OUTSIDE TRANSACTION
 // orders.service.ts
