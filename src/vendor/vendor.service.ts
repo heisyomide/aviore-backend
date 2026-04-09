@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   ConflictException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { v2 as cloudinary } from 'cloudinary';
@@ -17,6 +18,7 @@ import { Roles } from '../auth/roles.decorator';
 
 @Injectable()
 export class VendorService {
+  private readonly logger = new Logger(VendorService.name);
   createProduct(vendorId: any, dto: VendorCreateProductDto , file: Express.Multer.File) {
     throw new Error('Method not implemented.');
   }
@@ -681,6 +683,60 @@ async updateFullProfile(vendorId: string, data: {
       rating: 4.8, // Placeholder — replace with real aggregated rating if implemented
     }));
   }
+
+
+  async markOrderAsCompleted(orderId: string, vendorId: string) {
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. Fetch order with security check (ensures this vendor owns the order)
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: { items: true },
+      });
+
+      if (!order) throw new NotFoundException('Order registry not found');
+      
+      // 🛡️ Security Guard: Prevent unauthorized vendors from settling funds
+      if (order.vendorId !== vendorId) {
+        throw new Error('UNAUTHORIZED_SETTLEMENT_ATTEMPT');
+      }
+
+      if (order.status === 'COMPLETED') return { status: 'ALREADY_COMPLETED' };
+
+      // 2. MARK ORDER AS COMPLETED
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: 'COMPLETED' },
+      });
+
+      // 3. RELEASE FUNDS FROM ESCROW
+      for (const item of order.items) {
+        if (item.vendorEarning && item.payoutStatus === 'LOCKED') {
+          const earning = Number(item.vendorEarning);
+
+          // 🛡️ Fix TS2322 by ensuring vendorId is not null/undefined
+          if (order.vendorId) {
+            await tx.vendorWallet.update({
+              where: { vendorId: order.vendorId },
+              data: {
+                pendingBalance: { decrement: earning },
+                availableBalance: { increment: earning },
+              },
+            });
+
+            await tx.orderItem.update({
+              where: { id: item.id },
+              data: { payoutStatus: 'PAID' },
+            });
+          }
+        }
+      }
+
+      this.logger.log(`💰 LIQUIDITY_RELEASED: Order ${orderId} finalized for vendor ${vendorId}`);
+      
+      return { status: 'SUCCESS', releasedAmount: order.totalAmount };
+    });
+  }
+
 
   // ────────────────────────────────────────────────
   //  Vendor Profile (public/private view)
