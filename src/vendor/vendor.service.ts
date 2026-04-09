@@ -685,57 +685,73 @@ async updateFullProfile(vendorId: string, data: {
   }
 
 
-  async markOrderAsCompleted(orderId: string, vendorId: string) {
-    return await this.prisma.$transaction(async (tx) => {
-      // 1. Fetch order with security check (ensures this vendor owns the order)
-      const order = await tx.order.findUnique({
-        where: { id: orderId },
-        include: { items: true },
-      });
-
-      if (!order) throw new NotFoundException('Order registry not found');
-      
-      // 🛡️ Security Guard: Prevent unauthorized vendors from settling funds
-      if (order.vendorId !== vendorId) {
-        throw new Error('UNAUTHORIZED_SETTLEMENT_ATTEMPT');
-      }
-
-      if (order.status === 'COMPLETED') return { status: 'ALREADY_COMPLETED' };
-
-      // 2. MARK ORDER AS COMPLETED
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: 'COMPLETED' },
-      });
-
-      // 3. RELEASE FUNDS FROM ESCROW
-      for (const item of order.items) {
-        if (item.vendorEarning && item.payoutStatus === 'LOCKED') {
-          const earning = Number(item.vendorEarning);
-
-          // 🛡️ Fix TS2322 by ensuring vendorId is not null/undefined
-          if (order.vendorId) {
-            await tx.vendorWallet.update({
-              where: { vendorId: order.vendorId },
-              data: {
-                pendingBalance: { decrement: earning },
-                availableBalance: { increment: earning },
-              },
-            });
-
-            await tx.orderItem.update({
-              where: { id: item.id },
-              data: { payoutStatus: 'PAID' },
-            });
-          }
-        }
-      }
-
-      this.logger.log(`💰 LIQUIDITY_RELEASED: Order ${orderId} finalized for vendor ${vendorId}`);
-      
-      return { status: 'SUCCESS', releasedAmount: order.totalAmount };
+async markOrderAsCompleted(orderId: string, vendorId: string) {
+  return await this.prisma.$transaction(async (tx) => {
+    // 1. Fetch order with items and product context
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
+      include: { items: { include: { product: true } } },
     });
-  }
+
+    if (!order) throw new NotFoundException('Order registry node not found');
+    
+    // 🛡️ SECURITY: Ownership Verification
+    if (order.vendorId !== vendorId) {
+      throw new ForbiddenException('UNAUTHORIZED_PROTOCOL: You do not own this order registry.');
+    }
+
+    if (order.status === 'COMPLETED') return { status: 'ALREADY_COMPLETED' };
+
+    // 2. STATUS TRANSITION
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: 'COMPLETED' },
+    });
+
+    let totalReleased = 0;
+
+    // 3. SETTLEMENT ENGINE
+    for (const item of order.items) {
+      // 🛡️ RECOVERY LOGIC: If webhook failed to set earnings, calculate them now (90/10 split)
+      let earning = item.vendorEarning ? Number(item.vendorEarning) : 0;
+      
+      if (earning === 0 && Number(item.priceAtPurchase) > 0) {
+        earning = Number(item.priceAtPurchase) * item.quantity * 0.90;
+      }
+
+      // Only proceed if we have a valid earning and it hasn't been paid already
+      if (earning > 0 && item.payoutStatus !== 'PAID') {
+        // Move funds from Pending (Escrow) to Available (Liquidity)
+        await tx.vendorWallet.update({
+          where: { vendorId: vendorId },
+          data: {
+            pendingBalance: { decrement: earning },
+            availableBalance: { increment: earning },
+          },
+        });
+
+        // Finalize Item Status
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { 
+            vendorEarning: earning,
+            payoutStatus: 'PAID' 
+          },
+        });
+
+        totalReleased += earning;
+      }
+    }
+
+    this.logger.log(`💰 LIQUIDITY_RELEASED: Order ${orderId} finalized. Released: ₦${totalReleased}`);
+    
+    return { 
+      success: true, 
+      message: 'Settlement finalized', 
+      data: { releasedAmount: totalReleased } 
+    };
+  });
+}
 
 
   // ────────────────────────────────────────────────

@@ -89,19 +89,17 @@ async getOrderDetails(@Param('id') id: string, @Req() req) {
 
 @Patch(':id/complete')
   @UseGuards(JwtAuthGuard)
-  async completeOrder(
-    @Param('id') orderId: string,
-    @Req() req: any
-  ) {
-    // We pass the vendorId from the JWT token to ensure they only settle THEIR orders
+  async completeOrder(@Param('id') orderId: string, @Req() req: any) {
+    // req.user is populated by your JwtStrategy
     const vendorId = req.user.vendorId; 
     
     if (!vendorId) {
-      throw new Error('USER_IS_NOT_REGISTERED_AS_VENDOR');
+      throw new ForbiddenException('User is not registered as a vendor node.');
     }
 
     return this.vendorService.markOrderAsCompleted(orderId, vendorId);
   }
+
 
 
   // --- PUBLIC/USER ROUTES (Anyone logged in) ---
