@@ -7,7 +7,7 @@ import {
   OnModuleInit
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { OrderStatus, PaymentStatus } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import  axios from 'axios';
 
 // Better practice: Use a modern import or a specific type definition for the SDK
@@ -148,258 +148,133 @@ async initializePayment(orderId: string, email: string, name: string) {
    * WEBHOOK_FINALIZATION_PROTOCOL (Multi-Vendor Edition)
    * Fragments a single customer payment into granular vendor escrow records.
    */
-  async handleWebhook(signature: string, payload: any) {
+async handleWebhook(signature: string, payload: any) {
   const secretHash = process.env.FLW_SECRET_HASH;
 
+  // 1. SECURITY_HANDSHAKE
   if (signature !== secretHash) {
-    this.logger.warn(
-      '⚠️ WEBHOOK_REJECTED: Invalid Flutterwave signature',
-    );
+    this.logger.warn('⚠️ SECURITY_BREACH: Invalid Webhook Signature Detected');
     throw new BadRequestException('UNAUTHORIZED_WEBHOOK');
   }
 
-  const {
-    tx_ref,
-    status,
-    id: flutterwaveTransactionId,
-    amount: paidAmount,
-  } = payload;
+  const { tx_ref, status, id: flwId, amount: paidAmount } = payload;
+  
+  // 🛡️ NORMALIZE STATUS: Ensures 'Successful', 'SUCCESSFUL', and 'completed' are handled identically
+  const normalizedStatus = String(status).toLowerCase();
 
   try {
-    return await this.prisma.$transaction(
-      async (tx) => {
-        const payment = await tx.payment.findUnique({
-          where: {
-            reference: tx_ref,
-          },
-          include: {
-            order: {
-              include: {
-                items: {
-                  include: {
-                    product: true,
-                  },
-                },
-              },
-            },
-          },
+    return await this.prisma.$transaction(async (tx) => {
+      // 2. DATA_RECOVERY
+      const payment = await tx.payment.findUnique({
+        where: { reference: tx_ref },
+        include: { 
+          order: { 
+            include: { items: { include: { product: true } } } 
+          } 
+        }
+      });
+
+      if (!payment) throw new NotFoundException('TRANSACTION_REF_NOT_FOUND');
+
+      // 3. IDEMPOTENCY_GUARD: Prevent double-processing funds
+      if (payment.status === PaymentStatus.SUCCESSFUL) {
+        return { status: 'IGNORED', message: 'ALREADY_PROCESSED' };
+      }
+
+      // 4. FAILURE_FLOW
+      if (['failed', 'cancelled'].includes(normalizedStatus)) {
+        await this.handleFailedPayment(tx, payment.id, payment.orderId);
+        return { status: 'FAILED' };
+      }
+
+      // 5. SUCCESS_FLOW
+      if (['successful', 'completed'].includes(normalizedStatus)) {
+        const expectedAmount = Number(payment.order.totalAmount);
+        
+        // ⚖️ ANTI-TAMPER_PROTECTION
+        if (Math.abs(Number(paidAmount) - expectedAmount) > 0.01) {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.FAILED, metadata: 'VALUATION_MISMATCH' }
+          });
+          this.logger.error(`❌ TAMPER_ATTEMPT: Order ${payment.orderId} - Expected ${expectedAmount}, Got ${paidAmount}`);
+          return { status: 'ERROR', message: 'PRICE_TAMPER_DETECTED' };
+        }
+
+        // 6. ATOMIC_SETTLEMENT
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.SUCCESSFUL, externalId: String(flwId) },
         });
 
-        if (!payment) {
-          throw new NotFoundException(
-            'TRANSACTION_REFERENCE_NOT_FOUND',
-          );
-        }
+        await tx.order.update({
+          where: { id: payment.orderId },
+          data: { status: OrderStatus.PAID, totalPaid: Number(paidAmount) },
+        });
 
-        // Prevent duplicate processing
-        if (
-          payment.status ===
-          PaymentStatus.SUCCESSFUL
-        ) {
-          this.logger.log(
-            `⚠️ WEBHOOK_DUPLICATE_IGNORED: ${tx_ref}`,
-          );
+        // 7. FRAGMENTATION_ENGINE: Splitting earnings into vendor escrows
+        await this.settleOrderItems(tx, payment.order.items);
 
-          return {
-            status: 'IGNORED',
-          };
-        }
+        this.logger.log(`✅ SETTLEMENT_COMPLETE: Order ${payment.orderId} moved to PAID/LOCKED status.`);
+        return { status: 'SUCCESS' };
+      }
 
-        // FAILED PAYMENT FLOW
-        if (
-          status === 'failed' ||
-          status === 'cancelled'
-        ) {
-          await tx.payment.update({
-            where: {
-              reference: tx_ref,
-            },
-            data: {
-              status: PaymentStatus.FAILED,
-            },
-          });
-
-          await tx.order.update({
-            where: {
-              id: payment.orderId,
-            },
-            data: {
-              status: OrderStatus.CANCELLED,
-            },
-          });
-
-          return {
-            status: 'FAILED',
-          };
-        }
-
-        // SUCCESS FLOW
-        if (
-          status === 'successful' ||
-          status === 'completed'
-        ) {
-          const expectedAmount = Number(
-            payment.order.totalAmount,
-          );
-
-          const receivedAmount =
-            Number(paidAmount);
-
-          // Anti-tamper protection
-          if (
-            Math.abs(
-              receivedAmount -
-                expectedAmount,
-            ) > 0.01
-          ) {
-            await tx.payment.update({
-              where: {
-                reference: tx_ref,
-              },
-              data: {
-                status:
-                  PaymentStatus.FAILED,
-                metadata:
-                  'VALUATION_MISMATCH',
-              },
-            });
-
-            this.logger.error(
-              `❌ PAYMENT_TAMPER_DETECTED: expected ₦${expectedAmount}, received ₦${receivedAmount}`,
-            );
-
-            return {
-              status: 'ERROR',
-              message:
-                'PRICE_TAMPER_DETECTED',
-            };
-          }
-
-          // Update payment
-          await tx.payment.update({
-            where: {
-              reference: tx_ref,
-            },
-            data: {
-              status:
-                PaymentStatus.SUCCESSFUL,
-              externalId: String(
-                flutterwaveTransactionId,
-              ),
-            },
-          });
-
-          // Update order
-          await tx.order.update({
-            where: {
-              id: payment.orderId,
-            },
-            data: {
-              status: OrderStatus.PAID,
-              totalPaid:
-                receivedAmount,
-            },
-          });
-
-          // Process each order item
-          for (const item of payment.order
-            .items) {
-            const grossAmount =
-              Number(
-                item.priceAtPurchase,
-              ) * item.quantity;
-
-            const commission =
-              grossAmount *
-              this.COMMISSION_RATE;
-
-            const vendorEarning =
-              grossAmount -
-              commission;
-
-            // Update order item
-            await tx.orderItem.update({
-              where: {
-                id: item.id,
-              },
-              data: {
-                commission,
-                vendorEarning,
-                payoutStatus:
-                  'LOCKED',
-              },
-            });
-
-            // Update vendor wallet
-            await tx.vendorWallet.upsert({
-              where: {
-                vendorId:
-                  item.product
-                    .vendorId,
-              },
-              update: {
-                pendingBalance: {
-                  increment:
-                    vendorEarning,
-                },
-                totalEarnings: {
-                  increment:
-                    vendorEarning,
-                },
-              },
-              create: {
-                vendorId:
-                  item.product
-                    .vendorId,
-                availableBalance: 0,
-                pendingBalance:
-                  vendorEarning,
-                totalEarnings:
-                  vendorEarning,
-              },
-            });
-
-            // Reduce inventory
-            await tx.product.update({
-              where: {
-                id: item.productId,
-              },
-              data: {
-                stock: {
-                  decrement:
-                    item.quantity,
-                },
-              },
-            });
-          }
-
-          this.logger.log(
-            `✅ PAYMENT_SETTLED: Order ${payment.orderId} processed successfully`,
-          );
-
-          return {
-            status: 'SUCCESS',
-          };
-        }
-
-        return {
-          status: 'IGNORED',
-          message:
-            'UNSUPPORTED_PAYMENT_STATUS',
-        };
-      },
-      {
-        timeout: 20000,
-      },
-    );
+      return { status: 'IGNORED', message: 'UNSUPPORTED_STATUS' };
+    }, { timeout: 20000 });
   } catch (error: any) {
-    this.logger.error(
-      `❌ WEBHOOK_FATAL: ${error.message}`,
-    );
-
-    throw new InternalServerErrorException(
-      'SETTLEMENT_FINALIZATION_FAILED',
-    );
+    this.logger.error(`❌ WEBHOOK_CRITICAL_FAILURE: ${error.message}`);
+    throw new InternalServerErrorException('SETTLEMENT_PROTOCOL_FAILED');
   }
+}
+
+/**
+ * 💰 FRAGMENTATION_PROTOCOL
+ * Splits order revenue into Platform Commission and Vendor Escrow (Locked)
+ */
+private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
+  for (const item of items) {
+    const grossAmount = Number(item.priceAtPurchase) * item.quantity;
+    const commission = grossAmount * this.COMMISSION_RATE;
+    const vendorEarning = grossAmount - commission;
+
+    // A. Update Item Record
+    await tx.orderItem.update({
+      where: { id: item.id },
+      data: {
+        commission,
+        vendorEarning,
+        payoutStatus: 'LOCKED', // Money held in escrow until order COMPLETED
+      },
+    });
+
+    // B. Update Vendor Wallet (In Escrow)
+    await tx.vendorWallet.upsert({
+      where: { vendorId: item.product.vendorId },
+      update: {
+        pendingBalance: { increment: vendorEarning },
+        totalEarnings: { increment: vendorEarning },
+      },
+      create: {
+        vendorId: item.product.vendorId,
+        availableBalance: 0,
+        pendingBalance: vendorEarning,
+        totalEarnings: vendorEarning,
+      },
+    });
+
+    // C. Decrement Inventory Registry
+    await tx.product.update({
+      where: { id: item.productId },
+      data: { stock: { decrement: item.quantity } },
+    });
+  }
+}
+
+/**
+ * ❌ FAILURE_CLEANUP
+ */
+private async handleFailedPayment(tx: Prisma.TransactionClient, paymentId: string, orderId: string) {
+  await tx.payment.update({ where: { id: paymentId }, data: { status: PaymentStatus.FAILED } });
+  await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
 }
 }
