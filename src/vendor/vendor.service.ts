@@ -702,52 +702,60 @@ async markOrderAsCompleted(orderId: string, vendorId: string) {
 
     if (order.status === 'COMPLETED') return { status: 'ALREADY_COMPLETED' };
 
-    // 2. STATUS TRANSITION
+    // 2. STATUS TRANSITION & TOTAL PAID RECOVERY
+    // If Webhook failed, totalPaid will be null. We recover it using totalAmount.
     await tx.order.update({
       where: { id: orderId },
-      data: { status: 'COMPLETED' },
+      data: { 
+        status: 'COMPLETED',
+        totalPaid: order.totalPaid ? order.totalPaid : order.totalAmount // ✅ Fix: Fill the Total Paid NULL
+      },
     });
 
     let totalReleased = 0;
 
     // 3. SETTLEMENT ENGINE
     for (const item of order.items) {
-      // 🛡️ RECOVERY LOGIC: If webhook failed to set earnings, calculate them now (90/10 split)
-      let earning = item.vendorEarning ? Number(item.vendorEarning) : 0;
+      // 🛡️ RECOVERY MATH: Calculate 90/10 split on the fly
+      const unitPrice = Number(item.priceAtPurchase || 0);
+      const totalGross = unitPrice * item.quantity;
       
-      if (earning === 0 && Number(item.priceAtPurchase) > 0) {
-        earning = Number(item.priceAtPurchase) * item.quantity * 0.90;
-      }
+      const calculatedCommission = totalGross * 0.10; // 10% Platform Revenue
+      const calculatedEarning = totalGross - calculatedCommission; // 90% Vendor Share
 
-      // Only proceed if we have a valid earning and it hasn't been paid already
-      if (earning > 0 && item.payoutStatus !== 'PAID') {
-        // Move funds from Pending (Escrow) to Available (Liquidity)
+      // Only move money if it hasn't been paid already
+      if (item.payoutStatus !== 'PAID' && totalGross > 0) {
+        
+        // 💰 UPDATE WALLET: Release from Escrow to Liquidity
         await tx.vendorWallet.update({
           where: { vendorId: vendorId },
           data: {
-            pendingBalance: { decrement: earning },
-            availableBalance: { increment: earning },
+            // Only decrement pending if it was actually put there by a webhook
+            // Otherwise, just increment available balance
+            pendingBalance: { decrement: item.vendorEarning ? Number(item.vendorEarning) : 0 },
+            availableBalance: { increment: calculatedEarning },
           },
         });
 
-        // Finalize Item Status
+        // 📝 UPDATE ORDER ITEM: Fill both Earning and Commission
         await tx.orderItem.update({
           where: { id: item.id },
           data: { 
-            vendorEarning: earning,
+            vendorEarning: calculatedEarning, // ✅ No more NULL
+            commission: calculatedCommission, // ✅ No more NULL
             payoutStatus: 'PAID' 
           },
         });
 
-        totalReleased += earning;
+        totalReleased += calculatedEarning;
       }
     }
 
-    this.logger.log(`💰 LIQUIDITY_RELEASED: Order ${orderId} finalized. Released: ₦${totalReleased}`);
+    this.logger.log(`💰 AUDIT_COMPLETE: Order ${orderId} finalized. Platform Fee: ₦${Number(order.totalAmount) * 0.10}`);
     
     return { 
       success: true, 
-      message: 'Settlement finalized', 
+      message: 'Settlement and Audit finalized', 
       data: { releasedAmount: totalReleased } 
     };
   });
