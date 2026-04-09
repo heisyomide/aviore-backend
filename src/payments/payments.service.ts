@@ -149,96 +149,257 @@ async initializePayment(orderId: string, email: string, name: string) {
    * Fragments a single customer payment into granular vendor escrow records.
    */
   async handleWebhook(signature: string, payload: any) {
-    const secretHash = process.env.FLW_SECRET_HASH;
-    if (signature !== secretHash) {
-      this.logger.warn('⚠️ SECURITY_BREACH: Invalid Webhook Signature');
-      throw new BadRequestException('UNAUTHORIZED_WEBHOOK');
-    }
+  const secretHash = process.env.FLW_SECRET_HASH;
 
-    const { tx_ref, status, id: flwId, amount: paidAmount } = payload;
+  if (signature !== secretHash) {
+    this.logger.warn(
+      '⚠️ WEBHOOK_REJECTED: Invalid Flutterwave signature',
+    );
+    throw new BadRequestException('UNAUTHORIZED_WEBHOOK');
+  }
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        // 1. DATA_RECOVERY: Include items and their specific products/vendors
+  const {
+    tx_ref,
+    status,
+    id: flutterwaveTransactionId,
+    amount: paidAmount,
+  } = payload;
+
+  try {
+    return await this.prisma.$transaction(
+      async (tx) => {
         const payment = await tx.payment.findUnique({
-          where: { reference: tx_ref },
-          include: { 
-            order: { 
-              include: { 
-                items: { include: { product: true } } 
-              } 
-            } 
-          }
+          where: {
+            reference: tx_ref,
+          },
+          include: {
+            order: {
+              include: {
+                items: {
+                  include: {
+                    product: true,
+                  },
+                },
+              },
+            },
+          },
         });
 
-        if (!payment) throw new NotFoundException('TRANSACTION_REF_NOT_FOUND');
-        
-        // 2. IDEMPOTENCY: Prevent double-processing
-        if (payment.status === PaymentStatus.SUCCESSFUL) {
-          return { status: 'IGNORED' };
+        if (!payment) {
+          throw new NotFoundException(
+            'TRANSACTION_REFERENCE_NOT_FOUND',
+          );
         }
 
-        if (status === 'successful') {
-          // 3. TAMPER_PROTECTION
-          const expectedAmount = Number(payment.order.totalAmount);
-          if (Math.abs(Number(paidAmount) - expectedAmount) > 0.01) {
-            await tx.payment.update({
-              where: { reference: tx_ref },
-              data: { status: PaymentStatus.FAILED, metadata: 'VALUATION_MISMATCH' }
-            });
-            return { status: 'ERROR', message: 'PRICE_TAMPER_DETECTED' };
-          }
+        // Prevent duplicate processing
+        if (
+          payment.status ===
+          PaymentStatus.SUCCESSFUL
+        ) {
+          this.logger.log(
+            `⚠️ WEBHOOK_DUPLICATE_IGNORED: ${tx_ref}`,
+          );
 
-          // 4. ATOMIC_REGISTRY_UPGRADE: Mark Payment and Order as PAID
+          return {
+            status: 'IGNORED',
+          };
+        }
+
+        // FAILED PAYMENT FLOW
+        if (
+          status === 'failed' ||
+          status === 'cancelled'
+        ) {
           await tx.payment.update({
-            where: { reference: tx_ref },
-            data: { status: PaymentStatus.SUCCESSFUL, externalId: String(flwId) },
+            where: {
+              reference: tx_ref,
+            },
+            data: {
+              status: PaymentStatus.FAILED,
+            },
           });
 
           await tx.order.update({
-            where: { id: payment.orderId },
-            data: { status: OrderStatus.PAID, totalPaid: Number(paidAmount) },
+            where: {
+              id: payment.orderId,
+            },
+            data: {
+              status: OrderStatus.CANCELLED,
+            },
           });
 
-          // 5. FRAGMENTATION_LOGIC: Split earnings per OrderItem/Vendor
-          for (const item of payment.order.items) {
-            // Calculate item-specific financials
-            const itemGross = Number(item.priceAtPurchase) * item.quantity;
-            const itemCommission = itemGross * this.COMMISSION_RATE;
-            const itemVendorEarning = itemGross - itemCommission;
+          return {
+            status: 'FAILED',
+          };
+        }
 
-            // Update individual item registry with financial split
-            await tx.orderItem.update({
-              where: { id: item.id },
+        // SUCCESS FLOW
+        if (
+          status === 'successful' ||
+          status === 'completed'
+        ) {
+          const expectedAmount = Number(
+            payment.order.totalAmount,
+          );
+
+          const receivedAmount =
+            Number(paidAmount);
+
+          // Anti-tamper protection
+          if (
+            Math.abs(
+              receivedAmount -
+                expectedAmount,
+            ) > 0.01
+          ) {
+            await tx.payment.update({
+              where: {
+                reference: tx_ref,
+              },
               data: {
-                commission: itemCommission,
-                vendorEarning: itemVendorEarning,
-                payoutStatus: 'LOCKED', // Escrow Lock engaged
+                status:
+                  PaymentStatus.FAILED,
+                metadata:
+                  'VALUATION_MISMATCH',
               },
             });
 
-            // 6. INVENTORY_ACQUISITION: Finalize stock decrement
+            this.logger.error(
+              `❌ PAYMENT_TAMPER_DETECTED: expected ₦${expectedAmount}, received ₦${receivedAmount}`,
+            );
+
+            return {
+              status: 'ERROR',
+              message:
+                'PRICE_TAMPER_DETECTED',
+            };
+          }
+
+          // Update payment
+          await tx.payment.update({
+            where: {
+              reference: tx_ref,
+            },
+            data: {
+              status:
+                PaymentStatus.SUCCESSFUL,
+              externalId: String(
+                flutterwaveTransactionId,
+              ),
+            },
+          });
+
+          // Update order
+          await tx.order.update({
+            where: {
+              id: payment.orderId,
+            },
+            data: {
+              status: OrderStatus.PAID,
+              totalPaid:
+                receivedAmount,
+            },
+          });
+
+          // Process each order item
+          for (const item of payment.order
+            .items) {
+            const grossAmount =
+              Number(
+                item.priceAtPurchase,
+              ) * item.quantity;
+
+            const commission =
+              grossAmount *
+              this.COMMISSION_RATE;
+
+            const vendorEarning =
+              grossAmount -
+              commission;
+
+            // Update order item
+            await tx.orderItem.update({
+              where: {
+                id: item.id,
+              },
+              data: {
+                commission,
+                vendorEarning,
+                payoutStatus:
+                  'LOCKED',
+              },
+            });
+
+            // Update vendor wallet
+            await tx.vendorWallet.upsert({
+              where: {
+                vendorId:
+                  item.product
+                    .vendorId,
+              },
+              update: {
+                pendingBalance: {
+                  increment:
+                    vendorEarning,
+                },
+                totalEarnings: {
+                  increment:
+                    vendorEarning,
+                },
+              },
+              create: {
+                vendorId:
+                  item.product
+                    .vendorId,
+                availableBalance: 0,
+                pendingBalance:
+                  vendorEarning,
+                totalEarnings:
+                  vendorEarning,
+              },
+            });
+
+            // Reduce inventory
             await tx.product.update({
-              where: { id: item.productId },
-              data: { stock: { decrement: item.quantity } }
+              where: {
+                id: item.productId,
+              },
+              data: {
+                stock: {
+                  decrement:
+                    item.quantity,
+                },
+              },
             });
           }
 
-          this.logger.log(`✅ MULTI_VENDOR_SETTLEMENT: Order ${payment.orderId} fragmented into vendor escrows.`);
-          return { status: 'SUCCESS' };
+          this.logger.log(
+            `✅ PAYMENT_SETTLED: Order ${payment.orderId} processed successfully`,
+          );
+
+          return {
+            status: 'SUCCESS',
+          };
         }
 
-        if (status === 'failed') {
-          await tx.payment.update({
-            where: { reference: tx_ref },
-            data: { status: PaymentStatus.FAILED },
-          });
-          return { status: 'FAILED' };
-        }
-      }, { timeout: 20000 });
-    } catch (error) {
-      this.logger.error(`❌ WEBHOOK_FATAL: ${error.message}`);
-      throw new InternalServerErrorException('SETTLEMENT_FINALIZATION_FAILED');
-    }
+        return {
+          status: 'IGNORED',
+          message:
+            'UNSUPPORTED_PAYMENT_STATUS',
+        };
+      },
+      {
+        timeout: 20000,
+      },
+    );
+  } catch (error: any) {
+    this.logger.error(
+      `❌ WEBHOOK_FATAL: ${error.message}`,
+    );
+
+    throw new InternalServerErrorException(
+      'SETTLEMENT_FINALIZATION_FAILED',
+    );
   }
+}
 }

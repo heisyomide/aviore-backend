@@ -27,66 +27,157 @@ export class VendorService {
    */
 async getVendorDashboard(vendorId: string) {
   const vendor = await this.prisma.vendor.findUnique({
-    where: { id: vendorId },
-    include: { 
+    where: {
+      id: vendorId,
+    },
+    include: {
       vendorWallet: true,
-      user: { select: { firstName: true, lastName: true } }
+      user: {
+        select: {
+          firstName: true,
+          lastName: true,
+        },
+      },
     },
   });
 
-  if (!vendor) throw new NotFoundException('Vendor profile not found');
+  if (!vendor) {
+    throw new NotFoundException(
+      'VENDOR_PROFILE_NOT_FOUND',
+    );
+  }
 
-  const [itemStats, productCount, recentItems] = await Promise.all([
+const paidStatuses: OrderStatus[] = [
+  OrderStatus.PAID,
+  OrderStatus.COMPLETED,
+];
+
+  const [
+    orderStats,
+    productCount,
+    recentOrders,
+  ] = await Promise.all([
     this.prisma.orderItem.aggregate({
-      where: { 
-        product: { vendorId: vendor.id },
-        order: { status: 'PAID' } 
+      where: {
+        product: {
+          vendorId,
+        },
+        order: {
+          status: {
+            in: paidStatuses,
+          },
+        },
       },
-      _sum: { vendorEarning: true },
-      _count: { id: true }
+      _sum: {
+        vendorEarning: true,
+      },
+      _count: {
+        id: true,
+      },
     }),
+
     this.prisma.product.count({
-      where: { vendorId: vendor.id, status: 'APPROVED' },
+      where: {
+        vendorId,
+        status: 'APPROVED',
+      },
     }),
+
     this.prisma.orderItem.findMany({
-      where: { product: { vendorId: vendor.id } },
+      where: {
+        product: {
+          vendorId,
+        },
+      },
       take: 5,
-      orderBy: { createdAt: 'desc' }, 
-      include: { 
-        order: { include: { user: true } },
-        product: { select: { title: true } } 
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        order: {
+          include: {
+            user: true,
+          },
+        },
+        product: {
+          select: {
+            title: true,
+          },
+        },
       },
     }),
   ]);
+
+  const wallet = vendor.vendorWallet;
 
   return {
     profile: {
       storeName: vendor.storeName,
       isVerified: vendor.isVerified,
-      ownerName: `${vendor.user.firstName} ${vendor.user.lastName}`,
+      ownerName: [
+        vendor.user?.firstName,
+        vendor.user?.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ') || 'Vendor',
       slug: vendor.slug,
     },
+
     wallet: {
-      // Handling potential nulls and Decimal conversions
-      availableBalance: Number(vendor.vendorWallet?.availableBalance ?? 0),
-      pendingBalance: Number(vendor.vendorWallet?.pendingBalance ?? 0),
-      totalEarnings: Number(vendor.vendorWallet?.totalEarnings ?? 0),
+      availableBalance: Number(
+        wallet?.availableBalance ?? 0,
+      ),
+      pendingBalance: Number(
+        wallet?.pendingBalance ?? 0,
+      ),
+      totalEarnings: Number(
+        wallet?.totalEarnings ?? 0,
+      ),
     },
+
     stats: {
-      totalOrders: itemStats._count ?? 0,
-      totalRevenue: Number(itemStats._sum.vendorEarning ?? 0),
+      totalOrders:
+        orderStats._count?.id ?? 0,
+
+      totalRevenue: Number(
+        orderStats._sum
+          ?.vendorEarning ?? 0,
+      ),
+
       activeProducts: productCount,
     },
-    recentOrders: recentItems.map((item) => ({
-      id: item.orderId,
-      artifact: item.product.title, 
-      customer: item.order?.user
-        ? `${item.order.user.firstName || ''} ${item.order.user.lastName || ''}`.trim()
-        : 'Guest',
-      amount: Number(item.vendorEarning),
-      status: item.order?.status,
-      date: item.createdAt,
-    })),
+
+    recentOrders: recentOrders.map(
+      (item) => ({
+        id: item.orderId,
+
+        artifact:
+          item.product?.title ??
+          'Product',
+
+        customer:
+          item.order?.user
+            ? [
+                item.order.user
+                  .firstName,
+                item.order.user
+                  .lastName,
+              ]
+                .filter(Boolean)
+                .join(' ')
+            : 'Guest',
+
+        amount: Number(
+          item.vendorEarning ?? 0,
+        ),
+
+        status:
+          item.order?.status ??
+          'PENDING',
+
+        date: item.createdAt,
+      }),
+    ),
   };
 }
 
