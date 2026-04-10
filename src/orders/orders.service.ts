@@ -164,9 +164,12 @@ try {
       valuation: order.totalAmount,
     },
   };
-} catch (error) {
-  // 🛡️ Log the actual error to your Render terminal so you can see it!
-  console.error("PAYMENT_LINK_GEN_FAILED:", error.message);
+} catch (error:any) {
+  console.error(
+    "PAYMENT_LINK_GEN_FAILED:",
+    error?.message || error
+  );
+
 
   return {
     success: false, // 🚨 CHANGE THIS TO FALSE

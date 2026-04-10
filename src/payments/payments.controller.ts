@@ -35,61 +35,128 @@ export class PaymentsController {
 
   // --- WEBHOOK ---
   @Post('webhook')
-  async handleWebhook(
-    @Body() body: any, 
-    @Headers('verif-hash') signature: string,
-    @Res() res
-  ) {
-    const secretHash = process.env.FLW_WEBHOOK_HASH;
-    
-    if (!signature || signature !== secretHash) {
-      return res.status(HttpStatus.UNAUTHORIZED).send('Invalid Hash');
-    }
+async handleWebhook(
+  @Body() body: any,
+  @Headers('verif-hash') signature: string,
+  @Res() res
+) {
+  const secretHash = process.env.FLW_WEBHOOK_HASH;
 
-    if (body.status === 'successful') {
-      const { tx_ref } = body;
-      const orderId = tx_ref.split('-')[1];
+  console.log('========== WEBHOOK RECEIVED ==========');
+  console.log('BODY:', JSON.stringify(body, null, 2));
+  console.log('SIGNATURE:', signature);
 
-      const [updatedPayment, updatedOrder] = await this.prisma.$transaction([
-        this.prisma.payment.update({
-          where: { reference: tx_ref },
-          data: { status: 'SUCCESSFUL' },
-        }),
-        this.prisma.order.update({
-          where: { id: orderId },
-          data: { status: 'PAID' },
-          include: { 
-            items: { 
-              include: { 
-                product: { 
-                  include: { 
-                    vendor: { include: { user: true } } 
-                  } 
-                } 
-              } 
-            } 
-          },
-        }),
-      ]);
-
-      try {
-        for (const item of updatedOrder.items) {
-          const vendorEmail = item.product.vendor.user.email;
-          const vendorName = item.product.vendor.storeName;
-          
-          await this.mailService.sendNewOrderNotification(vendorEmail, {
-            id: updatedOrder.id,
-            totalAmount: updatedOrder.totalAmount,
-            vendorName: vendorName,
-            productTitle: item.product.title,
-            quantity: item.quantity
-          });
-        }
-      } catch (mailError) {
-        console.error('Mail delivery failed:', mailError);
-      }
-    }
-
-    return res.status(HttpStatus.OK).send('Webhook Processed');
+  if (!signature || signature !== secretHash) {
+    console.error('INVALID WEBHOOK HASH');
+    return res.status(HttpStatus.UNAUTHORIZED).send('Invalid Hash');
   }
+
+  try {
+    if (body.status?.toLowerCase() !== 'successful') {
+      console.log('PAYMENT NOT SUCCESSFUL');
+      return res.status(HttpStatus.OK).send('Ignored');
+    }
+
+    const { tx_ref } = body;
+
+    const payment = await this.prisma.payment.findUnique({
+      where: { reference: tx_ref },
+      include: {
+        order: {
+          include: {
+            items: {
+              include: {
+                product: {
+                  include: {
+                    vendor: {
+                      include: {
+                        user: true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!payment) {
+      console.error('PAYMENT NOT FOUND:', tx_ref);
+      return res.status(HttpStatus.NOT_FOUND).send('Payment Not Found');
+    }
+
+    // IDEMPOTENCY CHECK
+    if (payment.status === 'SUCCESSFUL') {
+      console.log('ALREADY PROCESSED');
+      return res.status(HttpStatus.OK).send('Already Processed');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      console.log('UPDATING PAYMENT STATUS...');
+      
+      await tx.payment.update({
+        where: { reference: tx_ref },
+        data: {
+          status: 'SUCCESSFUL'
+        }
+      });
+
+      console.log('UPDATING ORDER STATUS...');
+      
+      await tx.order.update({
+        where: { id: payment.order.id },
+        data: {
+          status: 'PAID'
+        }
+      });
+
+      console.log('DECREMENTING STOCK...');
+
+      for (const item of payment.order.items) {
+        console.log(
+          `PRODUCT ${item.productId} STOCK BEFORE: ${item.product.stock}`
+        );
+
+        await tx.product.update({
+          where: {
+            id: item.productId
+          },
+          data: {
+            stock: {
+              decrement: item.quantity
+            }
+          }
+        });
+
+        console.log(
+          `PRODUCT ${item.productId} DECREMENTED BY ${item.quantity}`
+        );
+      }
+    });
+
+    console.log('SENDING MAILS...');
+
+    for (const item of payment.order.items) {
+      await this.mailService.sendNewOrderNotification(
+        item.product.vendor.user.email,
+        {
+          id: payment.order.id,
+          totalAmount: payment.order.totalAmount,
+          vendorName: item.product.vendor.storeName,
+          productTitle: item.product.title,
+          quantity: item.quantity
+        }
+      );
+    }
+
+    console.log('WEBHOOK COMPLETED SUCCESSFULLY');
+
+    return res.status(HttpStatus.OK).send('Processed');
+  } catch (error) {
+    console.error('WEBHOOK ERROR:', error);
+    return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send('Failed');
+  }
+}
 }

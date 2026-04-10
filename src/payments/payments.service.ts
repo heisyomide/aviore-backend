@@ -7,8 +7,9 @@ import {
   OnModuleInit
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
 import  axios from 'axios';
+import { DefaultArgs } from '@prisma/client/runtime/client';
 
 // Better practice: Use a modern import or a specific type definition for the SDK
 const Flutterwave = require('flutterwave-node-v3');
@@ -34,7 +35,8 @@ export class PaymentsService implements OnModuleInit {
     try {
       this.flw = new Flutterwave(FLW_PUBLIC_KEY, FLW_SECRET_KEY);
       this.logger.log('✅ Settlement Gateway: Flutterwave synchronized');
-    } catch (err) {
+    } catch (err: unknown) {
+      if (err instanceof Error) 
       this.logger.error(`❌ SDK_FAILURE: ${err.message}`);
     }
   }
@@ -151,81 +153,226 @@ async initializePayment(orderId: string, email: string, name: string) {
 async handleWebhook(signature: string, payload: any) {
   const secretHash = process.env.FLW_SECRET_HASH;
 
-  // 1. SECURITY_HANDSHAKE
-  if (signature !== secretHash) {
-    this.logger.warn('⚠️ SECURITY_BREACH: Invalid Webhook Signature Detected');
-    throw new BadRequestException('UNAUTHORIZED_WEBHOOK');
+  this.logger.log('========== WEBHOOK RECEIVED ==========');
+  this.logger.debug(
+    JSON.stringify(payload, null, 2),
+  );
+
+  if (!signature) {
+    this.logger.warn('NO SIGNATURE RECEIVED');
+    throw new BadRequestException('MISSING_SIGNATURE');
   }
 
-  const { tx_ref, status, id: flwId, amount: paidAmount } = payload;
-  
-  // 🛡️ NORMALIZE STATUS: Ensures 'Successful', 'SUCCESSFUL', and 'completed' are handled identically
-  const normalizedStatus = String(status).toLowerCase();
+  if (signature !== secretHash) {
+    this.logger.warn(
+      `INVALID SIGNATURE: ${signature}`,
+    );
+    throw new BadRequestException(
+      'UNAUTHORIZED_WEBHOOK',
+    );
+  }
+
+  const {
+    tx_ref,
+    status,
+    id: flwId,
+    amount: paidAmount,
+  } = payload;
+
+  const normalizedStatus = String(
+    status,
+  ).toLowerCase();
+
+  this.logger.log(
+    `WEBHOOK STATUS: ${normalizedStatus}`,
+  );
+  this.logger.log(`TX REF: ${tx_ref}`);
 
   try {
-    return await this.prisma.$transaction(async (tx) => {
-      // 2. DATA_RECOVERY
-      const payment = await tx.payment.findUnique({
-        where: { reference: tx_ref },
-        include: { 
-          order: { 
-            include: { items: { include: { product: true } } } 
-          } 
-        }
-      });
-
-      if (!payment) throw new NotFoundException('TRANSACTION_REF_NOT_FOUND');
-
-      // 3. IDEMPOTENCY_GUARD: Prevent double-processing funds
-      if (payment.status === PaymentStatus.SUCCESSFUL) {
-        return { status: 'IGNORED', message: 'ALREADY_PROCESSED' };
-      }
-
-      // 4. FAILURE_FLOW
-      if (['failed', 'cancelled'].includes(normalizedStatus)) {
-        await this.handleFailedPayment(tx, payment.id, payment.orderId);
-        return { status: 'FAILED' };
-      }
-
-      // 5. SUCCESS_FLOW
-      if (['successful', 'completed'].includes(normalizedStatus)) {
-        const expectedAmount = Number(payment.order.totalAmount);
-        
-        // ⚖️ ANTI-TAMPER_PROTECTION
-        if (Math.abs(Number(paidAmount) - expectedAmount) > 0.01) {
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: { status: PaymentStatus.FAILED, metadata: 'VALUATION_MISMATCH' }
+    return await this.prisma.$transaction(
+      async (tx) => {
+        const payment =
+          await tx.payment.findUnique({
+            where: { reference: tx_ref },
+            include: {
+              order: {
+                include: {
+                  items: {
+                    include: {
+                      product: true,
+                    },
+                  },
+                },
+              },
+            },
           });
-          this.logger.error(`❌ TAMPER_ATTEMPT: Order ${payment.orderId} - Expected ${expectedAmount}, Got ${paidAmount}`);
-          return { status: 'ERROR', message: 'PRICE_TAMPER_DETECTED' };
+
+        if (!payment) {
+          this.logger.error(
+            `PAYMENT NOT FOUND: ${tx_ref}`,
+          );
+          throw new NotFoundException(
+            'TRANSACTION_REF_NOT_FOUND',
+          );
         }
 
-        // 6. ATOMIC_SETTLEMENT
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: PaymentStatus.SUCCESSFUL, externalId: String(flwId) },
-        });
+        this.logger.log(
+          `PAYMENT FOUND: ${payment.id}`,
+        );
 
-        await tx.order.update({
-          where: { id: payment.orderId },
-          data: { status: OrderStatus.PAID, totalPaid: Number(paidAmount) },
-        });
+        if (
+          payment.status ===
+          PaymentStatus.SUCCESSFUL
+        ) {
+          this.logger.warn(
+            `ALREADY PROCESSED: ${tx_ref}`,
+          );
 
-        // 7. FRAGMENTATION_ENGINE: Splitting earnings into vendor escrows
-        await this.settleOrderItems(tx, payment.order.items);
+          return {
+            status: 'IGNORED',
+            message: 'ALREADY_PROCESSED',
+          };
+        }
 
-        this.logger.log(`✅ SETTLEMENT_COMPLETE: Order ${payment.orderId} moved to PAID/LOCKED status.`);
-        return { status: 'SUCCESS' };
-      }
+        if (
+          ['failed', 'cancelled'].includes(
+            normalizedStatus,
+          )
+        ) {
+          this.logger.warn(
+            `PAYMENT FAILED: ${tx_ref}`,
+          );
 
-      return { status: 'IGNORED', message: 'UNSUPPORTED_STATUS' };
-    }, { timeout: 20000 });
+          await this.handleFailedPayment(
+            tx,
+            payment.id,
+            payment.orderId,
+          );
+
+          return {
+            status: 'FAILED',
+          };
+        }
+
+        if (
+          ['successful', 'completed'].includes(
+            normalizedStatus,
+          )
+        ) {
+          const expectedAmount = Number(
+            payment.order.totalAmount,
+          );
+
+          this.logger.log(
+            `EXPECTED: ${expectedAmount}`,
+          );
+          this.logger.log(
+            `RECEIVED: ${paidAmount}`,
+          );
+
+          if (
+            Math.abs(
+              Number(paidAmount) -
+                expectedAmount,
+            ) > 0.01
+          ) {
+            this.logger.error(
+              `PRICE TAMPER DETECTED`,
+            );
+
+            await tx.payment.update({
+              where: {
+                id: payment.id,
+              },
+              data: {
+                status:
+                  PaymentStatus.FAILED,
+                metadata:
+                  'VALUATION_MISMATCH',
+              },
+            });
+
+            return {
+              status: 'ERROR',
+              message:
+                'PRICE_TAMPER_DETECTED',
+            };
+          }
+
+          this.logger.log(
+            'UPDATING PAYMENT...',
+          );
+
+          await tx.payment.update({
+            where: {
+              id: payment.id,
+            },
+            data: {
+              status:
+                PaymentStatus.SUCCESSFUL,
+              externalId:
+                String(flwId),
+            },
+          });
+
+          this.logger.log(
+            'UPDATING ORDER...',
+          );
+
+          await tx.order.update({
+            where: {
+              id: payment.orderId,
+            },
+            data: {
+              status:
+                OrderStatus.PAID,
+              totalPaid:
+                Number(paidAmount),
+            },
+          });
+
+          this.logger.log(
+            'STARTING ITEM SETTLEMENT...',
+          );
+
+          await this.settleOrderItems(
+            tx,
+            payment.order.items,
+          );
+
+          this.logger.log(
+            `SETTLEMENT COMPLETE: ${payment.orderId}`,
+          );
+
+          return {
+            status: 'SUCCESS',
+          };
+        }
+
+        this.logger.warn(
+          `UNSUPPORTED STATUS: ${normalizedStatus}`,
+        );
+
+        return {
+          status: 'IGNORED',
+          message:
+            'UNSUPPORTED_STATUS',
+        };
+      },
+      { timeout: 20000 },
+    );
   } catch (error: any) {
-    this.logger.error(`❌ WEBHOOK_CRITICAL_FAILURE: ${error.message}`);
-    throw new InternalServerErrorException('SETTLEMENT_PROTOCOL_FAILED');
+    this.logger.error(
+      `WEBHOOK FAILURE: ${error.message}`,
+      error.stack,
+    );
+
+    throw error;
   }
 }
+  handleFailedPayment(tx: Omit<PrismaClient<Prisma.PrismaClientOptions, never, DefaultArgs>, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">, id: string, orderId: string) {
+    throw new Error('Method not implemented.');
+  }
 
 /**
  * 💰 FRAGMENTATION_PROTOCOL
@@ -235,74 +382,195 @@ async handleWebhook(signature: string, payload: any) {
  * 💰 FRAGMENTATION_ENGINE
  * Handles financial splits, inventory reduction, and escrow locking.
  */
-private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
+private async settleOrderItems(
+  tx: Prisma.TransactionClient,
+  items: any[],
+) {
+  this.logger.log(
+    `🚀 SETTLEMENT_ENGINE_STARTED | Items: ${items.length}`,
+  );
+
   for (const item of items) {
-    // 🛡️ 1. DATA_INTEGRITY_CHECK
-    // Ensure we are working with real numbers to prevent math crashes
-    const price = Number(item.priceAtPurchase || 0);
-    const quantity = Number(item.quantity || 1);
-    
-    if (price <= 0) {
-      this.logger.error(`❌ SETTLEMENT_REJECTED: Item ${item.id} has invalid valuation (₦${price})`);
-      continue;
+    try {
+      this.logger.log(
+        `---------------- ITEM ${item.id} ----------------`,
+      );
+
+      const quantity = Number(item.quantity || 1);
+      const price = Number(
+        item.priceAtPurchase || 0,
+      );
+
+      this.logger.log(
+        `📦 Product ID: ${item.productId}`,
+      );
+      this.logger.log(
+        `🔢 Quantity: ${quantity}`,
+      );
+      this.logger.log(
+        `💰 Unit Price: ₦${price}`,
+      );
+
+      // 1. VALIDATION
+      if (price <= 0) {
+        this.logger.error(
+          `❌ INVALID_PRICE | Item ${item.id} | ₦${price}`,
+        );
+        continue;
+      }
+
+      if (quantity <= 0) {
+        this.logger.error(
+          `❌ INVALID_QUANTITY | Item ${item.id} | ${quantity}`,
+        );
+        continue;
+      }
+
+      // 2. FETCH LIVE PRODUCT
+      const currentProduct =
+        await tx.product.findUnique({
+          where: {
+            id: item.productId,
+          },
+          select: {
+            id: true,
+            stock: true,
+            vendorId: true,
+            title: true,
+          },
+        });
+
+      if (!currentProduct) {
+        this.logger.error(
+          `❌ PRODUCT_NOT_FOUND | ${item.productId}`,
+        );
+        continue;
+      }
+
+      this.logger.log(
+        `📦 STOCK_BEFORE: ${currentProduct.stock}`,
+      );
+
+      if (
+        currentProduct.stock < quantity
+      ) {
+        this.logger.error(
+          `❌ INSUFFICIENT_STOCK | Product ${currentProduct.id} | Requested: ${quantity} | Available: ${currentProduct.stock}`,
+        );
+        continue;
+      }
+
+      // 3. FINANCIAL COMPUTATION
+      const grossAmount =
+        price * quantity;
+
+      const commission =
+        grossAmount *
+        this.COMMISSION_RATE;
+
+      const vendorEarning =
+        grossAmount - commission;
+
+      this.logger.log(
+        `💵 GROSS: ₦${grossAmount}`,
+      );
+      this.logger.log(
+        `🏦 COMMISSION: ₦${commission}`,
+      );
+      this.logger.log(
+        `💸 VENDOR_EARNING: ₦${vendorEarning}`,
+      );
+
+      // 4. ORDER ITEM UPDATE
+      await tx.orderItem.update({
+        where: { id: item.id },
+        data: {
+          commission,
+          vendorEarning,
+          payoutStatus: 'LOCKED',
+        },
+      });
+
+      this.logger.log(
+        `✅ ORDER_ITEM_UPDATED`,
+      );
+
+      // 5. VENDOR WALLET
+      const vendorTargetId =
+        currentProduct.vendorId;
+
+      if (!vendorTargetId) {
+        this.logger.error(
+          `❌ VENDOR_NOT_FOUND | Item ${item.id}`,
+        );
+        continue;
+      }
+
+      await tx.vendorWallet.upsert({
+        where: {
+          vendorId: vendorTargetId,
+        },
+        update: {
+          pendingBalance: {
+            increment:
+              vendorEarning,
+          },
+          totalEarnings: {
+            increment:
+              vendorEarning,
+          },
+        },
+        create: {
+          vendorId:
+            vendorTargetId,
+          availableBalance: 0,
+          pendingBalance:
+            vendorEarning,
+          totalEarnings:
+            vendorEarning,
+        },
+      });
+
+      this.logger.log(
+        `✅ WALLET_UPDATED | Vendor ${vendorTargetId}`,
+      );
+
+      // 6. STOCK DECREMENT
+      const updatedProduct =
+        await tx.product.update({
+          where: {
+            id: item.productId,
+          },
+          data: {
+            stock: {
+              decrement:
+                quantity,
+            },
+          },
+          select: {
+            stock: true,
+          },
+        });
+
+      this.logger.log(
+        `📉 STOCK_AFTER: ${updatedProduct.stock}`,
+      );
+
+      this.logger.log(
+        `✅ ITEM_SETTLED_SUCCESSFULLY`,
+      );
+    } catch (error: any) {
+      this.logger.error(
+        `❌ ITEM_SETTLEMENT_FAILED | ${item.id} | ${error.message}`,
+        error.stack,
+      );
+
+      throw error;
     }
-
-    // 🧮 2. FINANCIAL_COMPUTATION
-    const grossAmount = price * quantity;
-    const commission = grossAmount * this.COMMISSION_RATE;
-    const vendorEarning = grossAmount - commission;
-
-    // 📝 3. REGISTRY_UPDATE (OrderItem)
-    // We fill the NULLS here. If this fails, the whole transaction rolls back.
-    await tx.orderItem.update({
-      where: { id: item.id },
-      data: {
-        commission,
-        vendorEarning,
-        payoutStatus: 'LOCKED', // Officially moved to Escrow
-      },
-    });
-
-    // 🏦 4. WALLET_UPSERT (Vendor Balances)
-    // We target the vendor associated with the PRODUCT linked to this item
-    const vendorTargetId = item.product?.vendorId;
-    if (!vendorTargetId) {
-       this.logger.error(`❌ VENDOR_NODE_MISSING: Cannot credit item ${item.id} - No vendor ID linked.`);
-       continue;
-    }
-
-    await tx.vendorWallet.upsert({
-      where: { vendorId: vendorTargetId },
-      update: {
-        pendingBalance: { increment: vendorEarning },
-        totalEarnings: { increment: vendorEarning },
-      },
-      create: {
-        vendorId: vendorTargetId,
-        availableBalance: 0,
-        pendingBalance: vendorEarning,
-        totalEarnings: vendorEarning,
-      },
-    });
-
-    // 📦 5. INVENTORY_SYNCHRONIZATION
-    // This is where we solve your stock-not-decreasing issue.
-    await tx.product.update({
-      where: { id: item.productId },
-      data: { 
-        stock: { decrement: quantity } 
-      },
-    });
-
-    this.logger.log(`✅ ITEM_SETTLED: Registry updated for Vendor ${vendorTargetId}. Stock -${quantity}`);
   }
-}
 
-/**
- * ❌ FAILURE_CLEANUP
- */
-private async handleFailedPayment(tx: Prisma.TransactionClient, paymentId: string, orderId: string) {
-  await tx.payment.update({ where: { id: paymentId }, data: { status: PaymentStatus.FAILED } });
-  await tx.order.update({ where: { id: orderId }, data: { status: OrderStatus.CANCELLED } });
+  this.logger.log(
+    `🎉 SETTLEMENT_ENGINE_COMPLETED`,
+  );
 }
 }
