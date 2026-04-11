@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Res, HttpStatus, Headers, Param, UseGuards, Req, NotFoundException } from '@nestjs/common';
+import { Controller, Post, Body, Res, HttpStatus, Headers, Param, UseGuards, Req, NotFoundException, HttpCode } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { MailService } from '../mail/mail.service';
 import { PaymentsService } from './payments.service';
@@ -33,20 +33,19 @@ export class PaymentsController {
     );
   }
 
-  // --- WEBHOOK ---
 @Post('webhook')
+@HttpCode(HttpStatus.OK)
 async webhook(
-  @Body() body: any,
   @Headers('verif-hash') signature: string,
-  @Res() res,
+  @Body() body: any,
 ) {
   await this.paymentsService.handleWebhook(
     signature,
-    body.data,
+    body,
   );
 
-  return res
-    .status(HttpStatus.OK)
-    .send('Processed');
+  return {
+    message: 'Webhook processed',
+  };
 }
 }
