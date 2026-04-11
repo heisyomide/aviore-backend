@@ -5,11 +5,16 @@ import { startOfDay, startOfMonth, subDays, format } from 'date-fns';
 import { v2 as cloudinary } from 'cloudinary';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
-
+import { PaymentsService } from '../payments/payments.service';
 @Injectable()
 export class AdminService {
    private resend = new Resend(process.env.RESEND_API_KEY);
-  constructor(private readonly prisma: PrismaService) {}
+ constructor(
+  private prisma: PrismaService,
+  private paymentsService: PaymentsService,
+) {}
+
+
 
   // =========================================================
   // DASHBOARD OVERVIEW
@@ -1026,43 +1031,97 @@ async getPendingWithdrawals() {
    * Authorize and Complete a Vendor Payout.
    * Utilizes a transaction to ensure status update and audit logs are atomic.
    */
-  async approveWithdrawal(id: string, adminId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Verify the request node exists in the registry
-      const request = await tx.withdrawalRequest.findUnique({
-        where: { id },
-        include: { vendor: { select: { storeName: true } } }
-      });
+async approveWithdrawal(
+  id: string,
+  adminId: string,
+) {
+  return this.prisma.$transaction(
+    async (tx) => {
+      const request =
+        await tx.withdrawalRequest.findUnique({
+          where: { id },
+          include: {
+            vendor: {
+              select: {
+                storeName: true,
+              },
+            },
+          },
+        });
 
       if (!request) {
-        throw new NotFoundException(`Withdrawal node ${id} not found in registry.`);
+        throw new NotFoundException(
+          `Withdrawal ${id} not found`,
+        );
       }
 
-      // 2. Finalize status to COMPLETED
-      const withdrawal = await tx.withdrawalRequest.update({
-        where: { id },
-        data: { 
-          status: WithdrawalStatus.COMPLETED,
-          updatedAt: new Date() 
-        }
-      });
+      const bankDetails =
+        request.bankDetails as {
+          bankCode: string;
+          bankName: string;
+          accountNumber: string;
+          accountName: string;
+        };
 
-      // 3. Document the intervention in the Audit Log
+      if (
+        !bankDetails ||
+        !bankDetails.bankCode ||
+        !bankDetails.accountNumber
+      ) {
+        throw new BadRequestException(
+          'BANK_DETAILS_MISSING',
+        );
+      }
+
+      const transfer =
+        await this.paymentsService.initiateTransfer({
+          amount: Number(request.amount),
+          bankCode: bankDetails.bankCode,
+          accountNumber:
+            bankDetails.accountNumber,
+          narration: `Vendor payout for ${request.vendor.storeName}`,
+          reference: `PAYOUT-${request.id}`,
+        });
+
+      const updatedRequest =
+        await tx.withdrawalRequest.update({
+          where: { id },
+          data: {
+            status:
+              WithdrawalStatus.APPROVED,
+            metadata: {
+              transferId:
+                transfer.id,
+              transferRef:
+                transfer.reference,
+              approvedAt:
+                new Date(),
+              approvedBy: adminId,
+            },
+          },
+        });
+
       await tx.auditLog.create({
         data: {
           adminId,
-          action: AuditAction.APPROVE_PAYOUT,
+          action:
+            AuditAction.APPROVE_PAYOUT,
           targetId: id,
-          targetType: 'WITHDRAWAL',
-          details: `AUTHORIZED_PAYOUT: Value ₦${request.amount} for merchant ${request.vendor.storeName}`
-        }
+          targetType:
+            'WITHDRAWAL',
+          details: `PAYOUT SENT: ₦${request.amount}`,
+        },
       });
 
-      return withdrawal;
-    });
-  }
-
-
+      return {
+        message:
+          'PAYOUT_TRANSFER_INITIATED',
+        data: updatedRequest,
+        transfer,
+      };
+    },
+  );
+}
   // =========================================================
   // ANALYTICS
   // =========================================================

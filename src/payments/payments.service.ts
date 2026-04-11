@@ -1,483 +1,535 @@
-import { 
-  Injectable, 
-  InternalServerErrorException, 
-  NotFoundException, 
-  BadRequestException, 
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  BadRequestException,
   Logger,
-  OnModuleInit
+  OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { OrderStatus, PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
-import  axios from 'axios';
-import { DefaultArgs } from '@prisma/client/runtime/client';
+import {
+  OrderStatus,
+  PaymentStatus,
+  Prisma,
+} from '@prisma/client';
+import axios from 'axios';
 
-// Better practice: Use a modern import or a specific type definition for the SDK
 const Flutterwave = require('flutterwave-node-v3');
 
 @Injectable()
 export class PaymentsService implements OnModuleInit {
   private flw: any;
   private readonly logger = new Logger(PaymentsService.name);
-  
-  // PLATFORM_CONSTANTS: Encapsulated business logic
-  private readonly COMMISSION_RATE = 0.10; // 10% Platform Fee
+  private readonly COMMISSION_RATE = 0.1;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+  ) {}
 
   onModuleInit() {
-    const { FLW_PUBLIC_KEY, FLW_SECRET_KEY } = process.env;
+    const {
+      FLW_PUBLIC_KEY,
+      FLW_SECRET_KEY,
+    } = process.env;
 
-    if (!FLW_PUBLIC_KEY || !FLW_SECRET_KEY) {
-      this.logger.error('❌ CONFIG_ERROR: Flutterwave credentials missing in environment');
+    if (
+      !FLW_PUBLIC_KEY ||
+      !FLW_SECRET_KEY
+    ) {
+      this.logger.error(
+        'FLUTTERWAVE_KEYS_MISSING',
+      );
       return;
     }
 
     try {
-      this.flw = new Flutterwave(FLW_PUBLIC_KEY, FLW_SECRET_KEY);
-      this.logger.log('✅ Settlement Gateway: Flutterwave synchronized');
-    } catch (err: unknown) {
-      if (err instanceof Error) 
-      this.logger.error(`❌ SDK_FAILURE: ${err.message}`);
+      this.flw = new Flutterwave(
+        FLW_PUBLIC_KEY,
+        FLW_SECRET_KEY,
+      );
+
+      this.logger.log(
+        'FLUTTERWAVE_INITIALIZED',
+      );
+    } catch (error: any) {
+      this.logger.error(
+        error.message,
+      );
     }
   }
 
-  /**
-   * INITIALIZE_TRANSACTION
-   * Logic for generating checkout sessions with price-tamper protection.
-   */
- 
+  // =====================================================
+  // PAYOUT TRANSFER
+  // =====================================================
 
-async initializePayment(orderId: string, email: string, name: string) {
-  // 1. DATA_RECOVERY
-  const order = await this.prisma.order.findUnique({
-    where: { id: orderId },
-  });
+  async initiateTransfer(data: {
+    amount: number;
+    bankCode: string;
+    accountNumber: string;
+    narration: string;
+    reference: string;
+  }) {
+    if (!this.flw) {
+      throw new InternalServerErrorException(
+        'FLUTTERWAVE_NOT_INITIALIZED',
+      );
+    }
 
-  if (!order) {
-    this.logger.error(`[PAYMENT_INIT] Order ${orderId} not found in registry`);
-    throw new NotFoundException('ORDER_NOT_FOUND');
+    try {
+      const response =
+        await this.flw.Transfer.initiate({
+          account_bank:
+            data.bankCode,
+          account_number:
+            data.accountNumber,
+          amount: data.amount,
+          narration:
+            data.narration,
+          currency: 'NGN',
+          reference:
+            data.reference,
+          debit_currency: 'NGN',
+        });
+
+      return {
+        id: response?.data?.id,
+        reference:
+          response?.data
+            ?.reference,
+        status:
+          response?.data?.status,
+        raw: response?.data,
+      };
+    } catch (error: any) {
+      this.logger.error(
+        `TRANSFER_FAILED: ${
+          error?.response?.data
+            ?.message ||
+          error.message
+        }`,
+      );
+
+      throw new InternalServerErrorException(
+        'TRANSFER_FAILED',
+      );
+    }
   }
 
-  // 2. TRANSACTION_REFERENCE_GENERATION
-  // Using a cleaner format: AVR-[ShortID]-[Timestamp]
-  const txRef = `AVR-${order.id.split('-')[0].toUpperCase()}-${Date.now()}`;
+  // =====================================================
+  // PAYMENT INITIALIZATION
+  // =====================================================
 
-  // 3. PAYLOAD_CONSTRUCTION
-  const payload = {
-    tx_ref: txRef,
-    amount: Number(order.totalAmount),
-    currency: 'NGN',
-    // 🛡️ Ensure FRONTEND_URL in your .env has no trailing slash
-    redirect_url: `${process.env.FRONTEND_URL}/orders/confirmation`,
-    customer: {
-      email,
-      name: name || 'Valued Customer',
-    },
-    customizations: {
-      title: 'Pay Linkmart',
-      description: `Payment for Order #${order.id.slice(-6).toUpperCase()}`,
-      logo: 'https://aviore.ng/logo.png', // Optional: your brand logo
-    },
-  };
+  async initializePayment(
+    orderId: string,
+    email: string,
+    name: string,
+  ) {
+    const order =
+      await this.prisma.order.findUnique({
+        where: { id: orderId },
+      });
 
-  try {
-    // 4. GATEWAY_HANDSHAKE
-    const response = await axios.post(
-      'https://api.flutterwave.com/v3/payments',
-      payload,
-      {
-        headers: {
-          // 🛡️ CRITICAL: This must be the Secret Key (starts with FLWSECK-)
-          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 15000, // 15s timeout for slow network nodes
+    if (!order) {
+      throw new NotFoundException(
+        'ORDER_NOT_FOUND',
+      );
+    }
+
+    const txRef = `AVR-${order.id
+      .split('-')[0]
+      .toUpperCase()}-${Date.now()}`;
+
+    const payload = {
+      tx_ref: txRef,
+      amount: Number(
+        order.totalAmount,
+      ),
+      currency: 'NGN',
+      redirect_url: `${process.env.FRONTEND_URL}/orders/confirmation`,
+      customer: {
+        email,
+        name:
+          name ||
+          'Valued Customer',
       },
-    );
-
-    // 5. VALIDATION_OF_RESPONSE
-    if (response.data?.status !== 'success') {
-      const flwError = response.data?.message || 'Gateway Handshake Rejected';
-      throw new Error(flwError);
-    }
-
-    const paymentLink = response.data?.data?.link;
-
-    if (!paymentLink) {
-      throw new Error('GATEWAY_RESPONSE_ERROR: Payment link not generated');
-    }
-
-    // 6. PERSISTENCE_UPGRADE
-    // Saving the reference BEFORE redirecting is vital for the Webhook to work later
-    await this.prisma.payment.upsert({
-      where: { orderId: order.id },
-      update: {
-        reference: txRef,
-        status: 'PENDING',
+      customizations: {
+        title: 'Pay Linkmart',
+        description: `Payment for Order #${order.id
+          .slice(-6)
+          .toUpperCase()}`,
       },
-      create: {
-        orderId: order.id,
-        reference: txRef,
-        status: 'PENDING',
-        provider: 'FLUTTERWAVE',
-      },
-    });
+    };
 
-    return { link: paymentLink };
-
-  } catch (error: any) {
-    // 7. DEEP_DIAGNOSTICS
-    // This will print the EXACT reason to your Render/Railway terminal
-    const errorMessage = error.response?.data?.message || error.message;
-    this.logger.error(`❌ FLUTTERWAVE_INIT_ERROR: ${errorMessage}`);
-
-    // If it's a 401, the key in your deployment environment is wrong
-    if (error.response?.status === 401) {
-      this.logger.error("AUTH_ERROR: Check FLW_SECRET_KEY in your hosting dashboard.");
-    }
-
-    throw new InternalServerErrorException(
-      `SETTLEMENT_GATEWAY_FAILURE: ${errorMessage}`,
-    );
-  }
-}
-
-  /**
-   * WEBHOOK_FINALIZATION_PROTOCOL
-   * Handles idempotency, financial integrity, and escrow locking.
-   */
-  /**
-   * WEBHOOK_FINALIZATION_PROTOCOL (Multi-Vendor Edition)
-   * Fragments a single customer payment into granular vendor escrow records.
-   */
-async handleWebhook(
-  signature: string,
-  body: any,
-) {
-  const secretHash =
-    process.env.FLW_WEBHOOK_HASH;
-
-  this.logger.log(
-    '========== WEBHOOK RECEIVED =========='
-  );
-  this.logger.debug(
-    JSON.stringify(body, null, 2),
-  );
-
-  if (!signature) {
-    throw new BadRequestException(
-      'MISSING_SIGNATURE',
-    );
-  }
-
-  if (signature !== secretHash) {
-    this.logger.warn(
-      `INVALID SIGNATURE: ${signature}`,
-    );
-
-    throw new BadRequestException(
-      'UNAUTHORIZED_WEBHOOK',
-    );
-  }
-
-  const payload = body?.data;
-
-  if (!payload) {
-    throw new BadRequestException(
-      'INVALID_PAYLOAD',
-    );
-  }
-
-  const txRef = payload.tx_ref;
-  const flwId = payload.id;
-  const paidAmount = Number(
-    payload.amount,
-  );
-  const normalizedStatus =
-    String(
-      payload.status,
-    ).toLowerCase();
-
-  this.logger.log(
-    `STATUS: ${normalizedStatus}`,
-  );
-  this.logger.log(`TX_REF: ${txRef}`);
-
-  return this.prisma.$transaction(
-    async (tx) => {
-      const payment =
-        await tx.payment.findUnique({
-          where: {
-            reference: txRef,
+    try {
+      const response =
+        await axios.post(
+          'https://api.flutterwave.com/v3/payments',
+          payload,
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+              'Content-Type':
+                'application/json',
+            },
           },
-          include: {
-            order: {
+        );
+
+      const paymentLink =
+        response.data?.data?.link;
+
+      if (!paymentLink) {
+        throw new Error(
+          'PAYMENT_LINK_NOT_GENERATED',
+        );
+      }
+
+      await this.prisma.payment.upsert(
+        {
+          where: {
+            orderId:
+              order.id,
+          },
+          update: {
+            reference:
+              txRef,
+            status:
+              PaymentStatus.PENDING,
+          },
+          create: {
+            orderId:
+              order.id,
+            reference:
+              txRef,
+            status:
+              PaymentStatus.PENDING,
+            provider:
+              'FLUTTERWAVE',
+          },
+        },
+      );
+
+      return {
+        link: paymentLink,
+      };
+    } catch (error: any) {
+      this.logger.error(
+        error.message,
+      );
+
+      throw new InternalServerErrorException(
+        'PAYMENT_INITIALIZATION_FAILED',
+      );
+    }
+  }
+
+  // =====================================================
+  // WEBHOOK
+  // =====================================================
+
+  async handleWebhook(
+    signature: string,
+    body: any,
+  ) {
+    const secretHash =
+      process.env
+        .FLW_WEBHOOK_HASH;
+
+    if (
+      !signature ||
+      signature !==
+        secretHash
+    ) {
+      throw new BadRequestException(
+        'INVALID_SIGNATURE',
+      );
+    }
+
+    const payload =
+      body?.data;
+
+    if (!payload) {
+      throw new BadRequestException(
+        'INVALID_PAYLOAD',
+      );
+    }
+
+    const txRef =
+      payload.tx_ref;
+
+    const flwId =
+      payload.id;
+
+    const paidAmount =
+      Number(
+        payload.amount,
+      );
+
+    const status =
+      String(
+        payload.status,
+      ).toLowerCase();
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const payment =
+          await tx.payment.findUnique(
+            {
+              where: {
+                reference:
+                  txRef,
+              },
               include: {
-                items: {
+                order: {
                   include: {
-                    product: true,
+                    items: true,
                   },
                 },
               },
             },
-          },
-        });
+          );
 
-      if (!payment) {
-        throw new NotFoundException(
-          'PAYMENT_NOT_FOUND',
-        );
-      }
+        if (!payment) {
+          throw new NotFoundException(
+            'PAYMENT_NOT_FOUND',
+          );
+        }
 
-      if (
-        payment.status ===
-        PaymentStatus.SUCCESSFUL
-      ) {
-        return {
-          status: 'IGNORED',
-          message:
-            'ALREADY_PROCESSED',
-        };
-      }
+        if (
+          payment.status ===
+          PaymentStatus.SUCCESSFUL
+        ) {
+          return {
+            status:
+              'IGNORED',
+          };
+        }
 
-      if (
-        ['failed', 'cancelled'].includes(
-          normalizedStatus,
-        )
-      ) {
-        await this.handleFailedPayment(
-          tx,
-          payment.id,
-          payment.orderId,
-        );
+        if (
+          [
+            'failed',
+            'cancelled',
+          ].includes(
+            status,
+          )
+        ) {
+          await this.handleFailedPayment(
+            tx,
+            payment.id,
+            payment.orderId,
+          );
 
-        return {
-          status: 'FAILED',
-        };
-      }
+          return {
+            status:
+              'FAILED',
+          };
+        }
 
-      if (
-        ![
-          'successful',
-          'completed',
-        ].includes(
-          normalizedStatus,
-        )
-      ) {
-        return {
-          status: 'IGNORED',
-          message:
-            'UNSUPPORTED_STATUS',
-        };
-      }
+        const expectedAmount =
+          Number(
+            payment.order
+              .totalAmount,
+          );
 
-      const expectedAmount =
-        Number(
-          payment.order
-            .totalAmount,
-        );
+        if (
+          Math.abs(
+            paidAmount -
+              expectedAmount,
+          ) > 0.01
+        ) {
+          throw new BadRequestException(
+            'PRICE_MISMATCH',
+          );
+        }
 
-      if (
-        Math.abs(
-          paidAmount -
-            expectedAmount,
-        ) > 0.01
-      ) {
         await tx.payment.update({
           where: {
             id: payment.id,
           },
           data: {
             status:
-              PaymentStatus.FAILED,
-            metadata:
-              'PRICE_MISMATCH',
+              PaymentStatus.SUCCESSFUL,
+            externalId:
+              String(
+                flwId,
+              ),
           },
         });
 
+        await tx.order.update({
+          where: {
+            id: payment.orderId,
+          },
+          data: {
+            status:
+              OrderStatus.PAID,
+            totalPaid:
+              paidAmount,
+          },
+        });
+
+        await this.settleOrderItems(
+          tx,
+          payment.order.items,
+        );
+
         return {
-          status: 'ERROR',
+          status:
+            'SUCCESS',
         };
+      },
+    );
+  }
+
+  // =====================================================
+  // ESCROW SPLIT
+  // =====================================================
+
+  private async settleOrderItems(
+    tx: Prisma.TransactionClient,
+    items: any[],
+  ) {
+    for (const item of items) {
+      const gross =
+        Number(
+          item.priceAtPurchase,
+        ) *
+        Number(
+          item.quantity,
+        );
+
+      const commission =
+        gross *
+        this
+          .COMMISSION_RATE;
+
+      const earning =
+        gross -
+        commission;
+
+      const product =
+        await tx.product.findUnique(
+          {
+            where: {
+              id: item.productId,
+            },
+          },
+        );
+
+      if (!product) {
+        throw new NotFoundException(
+          'PRODUCT_NOT_FOUND',
+        );
       }
 
-      await tx.payment.update({
+      await tx.orderItem.update({
         where: {
-          id: payment.id,
+          id: item.id,
         },
         data: {
-          status:
-            PaymentStatus.SUCCESSFUL,
-          externalId:
-            String(flwId),
+          commission,
+          vendorEarning:
+            earning,
+          payoutStatus:
+            'LOCKED',
         },
       });
 
-      await tx.order.update({
-        where: {
-          id: payment.orderId,
+      await tx.vendorWallet.upsert(
+        {
+          where: {
+            vendorId:
+              product.vendorId,
+          },
+          update: {
+            pendingBalance:
+              {
+                increment:
+                  earning,
+              },
+          },
+          create: {
+            vendorId:
+              product.vendorId,
+            availableBalance: 0,
+            pendingBalance:
+              earning,
+            totalEarnings:
+              earning,
+          },
         },
-        data: {
-          status:
-            OrderStatus.PAID,
-          totalPaid:
-            paidAmount,
-        },
-      });
-
-      await this.settleOrderItems(
-        tx,
-        payment.order.items,
       );
 
-      return {
-        status: 'SUCCESS',
-      };
-    },
-  );
-}
+      await tx.product.update({
+        where: {
+          id: product.id,
+        },
+        data: {
+          stock: {
+            decrement:
+              item.quantity,
+          },
+        },
+      });
+    }
+  }
 
+  // =====================================================
+  // FAILED PAYMENT
+  // =====================================================
 
-/**
- * 💰 FRAGMENTATION_PROTOCOL
- * Splits order revenue into Platform Commission and Vendor Escrow (Locked)
- */
-/**
- * 💰 FRAGMENTATION_ENGINE
- * Handles financial splits, inventory reduction, and escrow locking.
- */
-private async settleOrderItems(
-  tx: Prisma.TransactionClient,
-  items: any[],
-) {
-  for (const item of items) {
-    const quantity = Number(
-      item.quantity,
-    );
+  private async handleFailedPayment(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    orderId: string,
+  ) {
+    const order =
+      await tx.order.findUnique({
+        where: {
+          id: orderId,
+        },
+        include: {
+          items: true,
+        },
+      });
 
-    const price = Number(
-      item.priceAtPurchase,
-    );
-
-    if (
-      quantity <= 0 ||
-      price <= 0
-    ) {
-      continue;
+    if (!order) {
+      throw new NotFoundException(
+        'ORDER_NOT_FOUND',
+      );
     }
 
-    const product =
-      await tx.product.findUnique({
+    for (const item of order.items) {
+      await tx.product.update({
         where: {
           id: item.productId,
         },
+        data: {
+          stock: {
+            increment:
+              item.quantity,
+          },
+        },
       });
-
-    if (!product) {
-      throw new NotFoundException(
-        `PRODUCT_NOT_FOUND: ${item.productId}`,
-      );
     }
 
-    if (
-      product.stock <
-      quantity
-    ) {
-      throw new BadRequestException(
-        `INSUFFICIENT_STOCK: ${product.id}`,
-      );
-    }
-
-    const gross =
-      price * quantity;
-
-    const commission =
-      gross *
-      this.COMMISSION_RATE;
-
-    const earning =
-      gross - commission;
-
-    await tx.orderItem.update({
+    await tx.payment.update({
       where: {
-        id: item.id,
+        id: paymentId,
       },
       data: {
-        commission,
-        vendorEarning:
-          earning,
-        payoutStatus:
-          'LOCKED',
+        status:
+          PaymentStatus.FAILED,
       },
     });
 
-    await tx.vendorWallet.upsert({
+    await tx.order.update({
       where: {
-        vendorId:
-          product.vendorId,
-      },
-      update: {
-        pendingBalance: {
-          increment:
-            earning,
-        },
-        totalEarnings: {
-          increment:
-            earning,
-        },
-      },
-      create: {
-        vendorId:
-          product.vendorId,
-        availableBalance: 0,
-        pendingBalance:
-          earning,
-        totalEarnings:
-          earning,
-      },
-    });
-
-    await tx.product.update({
-      where: {
-        id: product.id,
+        id: orderId,
       },
       data: {
-        stock: {
-          decrement:
-            quantity,
-        },
+        status:
+          OrderStatus.CANCELLED,
       },
     });
-
-    this.logger.log(
-      `STOCK UPDATED: ${product.id} -${quantity}`,
-    );
   }
-}
-
-
-private async handleFailedPayment(
-  tx: Prisma.TransactionClient,
-  paymentId: string,
-  orderId: string,
-) {
-  await tx.payment.update({
-    where: {
-      id: paymentId,
-    },
-    data: {
-      status:
-        PaymentStatus.FAILED,
-    },
-  });
-
-  await tx.order.update({
-    where: {
-      id: orderId,
-    },
-    data: {
-      status:
-        OrderStatus.CANCELLED,
-    },
-  });
-}
 }

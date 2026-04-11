@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma.service';
 import { v2 as cloudinary } from 'cloudinary';
 import { Readable } from 'stream';
 import { VendorCreateProductDto  } from './dto/vendor-product.dto';
-import { OrderStatus } from '@prisma/client'; // Import the auto-generated enum
+import { OrderStatus, Prisma } from '@prisma/client'; // Import the auto-generated enum
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'; 
 import { Roles } from '../auth/roles.decorator';
 
@@ -267,6 +267,21 @@ async requestWithdrawal(vendorId: string, amount: number) {
     });
 
     return request;
+  });
+}
+
+private async reverseWithdrawal(
+  tx: Prisma.TransactionClient,
+  vendorId: string,
+  amount: number,
+) {
+  await tx.vendorWallet.update({
+    where: { vendorId },
+    data: {
+      availableBalance: {
+        increment: amount
+      }
+    }
   });
 }
   // --- PLATFORM TICKETS (Admin Support) ---
@@ -911,13 +926,20 @@ async updateOrderStatus(
         ...(dto.carrier && { carrier: dto.carrier }),
       }
     });
-  } catch (error) {
-    // Prisma throws P2025 if the record isn't found or doesn't match the where clause
-    if (error.code === 'P2025') {
-      throw new ForbiddenException('Order not found or access denied');
-    }
-    throw new InternalServerErrorException('Could not update order status');
+  } catch (error: unknown) {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2025'
+  ) {
+    throw new ForbiddenException(
+      'Order not found or access denied'
+    );
   }
+
+  throw new InternalServerErrorException(
+    'Could not update order status'
+  );
+}
 }
 
 async getCustomerDetails(vendorId: string, userId: string) {

@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { OrderStatus, TransactionType } from '@prisma/client';
+import axios from 'axios';
 
 @Injectable()
 export class SettlementService {
@@ -90,4 +91,112 @@ export class SettlementService {
       return updatedItem;
     });
   }
+
+  async withdrawToBank(
+  vendorId: string,
+  amount: number,
+  bankCode: string,
+  accountNumber: string,
+) {
+  return this.prisma.$transaction(async (tx) => {
+    const wallet = await tx.vendorWallet.findUnique({
+      where: { vendorId },
+    });
+
+    if (!wallet) {
+      throw new NotFoundException(
+        'WALLET_NOT_FOUND',
+      );
+    }
+
+    if (
+      Number(wallet.availableBalance) <
+      amount
+    ) {
+      throw new BadRequestException(
+        'INSUFFICIENT_BALANCE',
+      );
+    }
+
+    const reference = `WDL-${Date.now()}`;
+
+    try {
+      const response = await axios.post(
+        'https://api.flutterwave.com/v3/transfers',
+        {
+          account_bank: bankCode,
+          account_number: accountNumber,
+          amount,
+          currency: 'NGN',
+          narration: 'Vendor payout',
+          reference,
+          callback_url: `${process.env.BACKEND_URL}/payments/transfer-webhook`,
+          debit_currency: 'NGN',
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+            'Content-Type':
+              'application/json',
+          },
+        },
+      );
+
+      if (
+        response.data?.status !==
+        'success'
+      ) {
+        throw new BadRequestException(
+          'TRANSFER_FAILED',
+        );
+      }
+
+      await tx.vendorWallet.update({
+        where: { vendorId },
+        data: {
+          availableBalance: {
+            decrement: amount,
+          },
+        },
+      });
+
+      await tx.walletTransaction.create({
+        data: {
+          vendorId,
+          amount,
+          type:
+            TransactionType.WITHDRAW,
+          status: 'COMPLETED',
+          reference,
+          metadata: {
+            bankCode,
+            accountNumber,
+            flutterwaveTransferId:
+              response.data.data.id,
+          },
+        },
+      });
+
+      this.logger.log(
+        `✅ WITHDRAWAL_SUCCESS | Vendor ${vendorId} | ₦${amount}`,
+      );
+
+      return {
+        status: 'SUCCESS',
+        reference,
+        transfer:
+          response.data.data,
+      };
+    } catch (error: any) {
+      this.logger.error(
+        `❌ WITHDRAWAL_FAILED | ${error.message}`,
+      );
+
+      throw new BadRequestException(
+        error.response?.data?.message ||
+          'TRANSFER_FAILED',
+      );
+    }
+  });
+}
 }

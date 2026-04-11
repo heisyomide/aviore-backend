@@ -211,10 +211,14 @@ async requestWithdrawal(
       message: 'Withdrawal request submitted successfully.',
       data: request
     };
-  } catch (error) {
-    // Pass through the "Insufficient balance" error from the service
-    throw new BadRequestException(error.message);
-  }
+  }catch (error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : 'Withdrawal request failed';
+
+  throw new BadRequestException(message);
+}
 }
 
 @Get('public-profile/:slug')

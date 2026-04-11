@@ -28,6 +28,7 @@ import { CouponsModule } from './coupons/coupons.module';
 import { ChatModule } from './chat/chat.module';
 import { StorefrontModule } from './storefront/storefront.module';
 import { CartModule } from './cart/cart.module';
+import { PayoutModule } from './payout/payout.module';
 
 @Global()
 @Module({
@@ -117,6 +118,7 @@ CacheModule.registerAsync({
     CouponsModule,
     StorefrontModule,
     CartModule,
+    PayoutModule,
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

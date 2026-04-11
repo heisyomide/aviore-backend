@@ -326,30 +326,33 @@ async hideReview(@Param('id') id: string, @Req() req: any) {
   // =========================================================
   // ANALYTICS
   // =========================================================
+@Get('analytics')
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+async getAnalytics(@Query() query: GetAnalyticsDto) {
+  const { range = '7d' } = query;
 
-  @Get('analytics')
-  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
-  async getAnalytics(@Query() query: GetAnalyticsDto) {
-    const { range } = query;
+  try {
+    const stats = await this.adminService.getMarketIntelligence(range);
 
-    try {
-      const stats = await this.adminService.getMarketIntelligence(
-        range || '7d'
-      );
+    return {
+      success: true,
+      meta: {
+        range,
+        timestamp: new Date().toISOString(),
+      },
+      data: stats,
+    };
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
 
-      return {
-        success: true,
-        meta: {
-          range,
-          timestamp: new Date().toISOString(),
-        },
-        data: stats,
-      };
-    } catch (error) {
-      this.logger.error(error.message);
-      throw new InternalServerErrorException('Analytics failed');
-    }
+    this.logger.error(`ANALYTICS_ERROR: ${message}`);
+
+    throw new InternalServerErrorException('Analytics failed');
   }
+}
 
 
   //==========================================================
