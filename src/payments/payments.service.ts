@@ -74,7 +74,7 @@ async initializePayment(orderId: string, email: string, name: string) {
       name: name || 'Valued Customer',
     },
     customizations: {
-      title: 'Aviore Luxury Registry',
+      title: 'Pay Linkmart',
       description: `Payment for Order #${order.id.slice(-6).toUpperCase()}`,
       logo: 'https://aviore.ng/logo.png', // Optional: your brand logo
     },
