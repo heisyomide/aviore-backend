@@ -1,4 +1,4 @@
-import { Module, Global, NestModule, MiddlewareConsumer } from '@nestjs/common';
+import { Module, Global, NestModule, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
@@ -125,10 +125,12 @@ CacheModule.registerAsync({
   exports: [PrismaService],
 })
 export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(FirewallMiddleware)
-      // 🛠️ FIX: Changed '*' to '*path' to resolve path-to-regexp warning
-      .forRoutes('*path'); 
-  }
+ configure(consumer: MiddlewareConsumer) {
+  consumer
+    .apply(FirewallMiddleware)
+    .forRoutes({
+      path: '*',
+      method: RequestMethod.ALL,
+    });
+}
 }

@@ -1,15 +1,48 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Head, HttpCode, HttpStatus } from '@nestjs/common';
 import { AppService } from './app.service';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+  ) {}
 
-  // 🚀 The 'exclude' logic doesn't exist in the decorator, 
-  // so we just visit /api OR move the message to a health check.
-  
+  /**
+   * ROOT HEALTH CHECK
+   * Used by Render, load balancers, uptime monitors,
+   * and manual browser verification.
+   */
   @Get()
-  getHello(): string {
-    return "🚀 Aviore API Vault is officially online.";
+  @HttpCode(HttpStatus.OK)
+  getRoot(): { status: string; message: string; timestamp: string } {
+    return {
+      status: 'OK',
+      message: '🚀 Aviore API Vault is officially online.',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * HEAD HEALTH CHECK
+   * Critical for Render / health probes
+   */
+  @Head()
+  @HttpCode(HttpStatus.OK)
+  healthCheck(): void {
+    return;
+  }
+
+  /**
+   * OPTIONAL API STATUS ENDPOINT
+   * Better for internal frontend ping tests
+   */
+  @Get('health')
+  @HttpCode(HttpStatus.OK)
+  getHealth(): { service: string; uptime: number; status: string } {
+    return {
+      service: 'Aviore Backend',
+      uptime: process.uptime(),
+      status: 'healthy',
+    };
   }
 }
