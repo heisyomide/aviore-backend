@@ -8,7 +8,6 @@ import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class AuthService {
-  mailService: any;
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -119,20 +118,15 @@ async login(
     );
   }
 
-await Promise.all([
-  this.prisma.loginLog.create({
-    data: { email, ip, userAgent: device, status: 'SUCCESS' },
-  }),
-
-  this.usersService.recordSession(user.id, device, ip),
-
-  // 🔥 ADD THIS: Trigger the login alert email via the queue
-  this.mailService.sendLoginAlert(user.email, {
-    ip,
-    device,
-    name: user.firstName || 'User',
-  }),
-
+  await Promise.all([
+    this.prisma.loginLog.create({
+      data: {
+        email,
+        ip,
+        userAgent: device,
+        status: 'SUCCESS',
+      },
+    }),
 
     this.usersService.recordSession(
       user.id,
