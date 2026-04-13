@@ -64,61 +64,134 @@ async register(registerDto: RegisterDto) {
 
 // src/auth/auth.service.ts
 
-async login(loginDto: LoginDto, req: any) {
-  const { email, password } = loginDto;
-  
-  // 1. EXTRACT METADATA
-  // Using x-forwarded-for helps identify real IPs even behind proxies like Cloudflare
-  const ip = (req.headers['x-forwarded-for'] as string) || req.ip || '0.0.0.0';
-  const device = req.headers['user-agent'] || 'Unknown Device';
 
-  // 2. IDENTITY LOOKUP
-  const user = await this.prisma.user.findUnique({ 
-    where: { email },
-    include: { vendor: { select: { id: true, isVerified: true, kycStatus: true } } } 
-  });
 
-  // 3. SECURITY & VALIDATION PROTOCOL
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    // RECORD FAILURE: Feeds the Security Center "Failed Attempts" counter
-    await this.prisma.loginLog.create({
-      data: { email, ip, status: 'FAILED' }
+async login(
+  loginDto: LoginDto,
+  req: any,
+) {
+  const { email, password } =
+    loginDto;
+
+  const ip =
+    this.extractClientIp(req);
+
+  const device =
+    String(
+      req.headers?.['user-agent'] ||
+        'Unknown Device'
+    );
+
+  const user =
+    await this.prisma.user.findUnique({
+      where: { email },
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            isVerified: true,
+            kycStatus: true,
+          },
+        },
+      },
     });
-    
-    throw new UnauthorizedException('INVALID_CREDENTIALS');
+
+  const isPasswordValid =
+    user &&
+    (await bcrypt.compare(
+      password,
+      user.password
+    ));
+
+  if (!user || !isPasswordValid) {
+    await this.prisma.loginLog.create({
+      data: {
+        email,
+        ip,
+        userAgent: device,
+        status: 'FAILED',
+      },
+    });
+
+    throw new UnauthorizedException(
+      'INVALID_CREDENTIALS'
+    );
   }
 
-  // 4. RECORD SUCCESS & SESSION
-  // We perform these in parallel to minimize latency
   await Promise.all([
     this.prisma.loginLog.create({
-      data: { email, ip, status: 'SUCCESS' }
+      data: {
+        email,
+        ip,
+        userAgent: device,
+        status: 'SUCCESS',
+      },
     }),
-    this.usersService.recordSession(user.id, device, ip)
+
+    this.usersService.recordSession(
+      user.id,
+      device,
+      ip
+    ),
   ]);
 
-  // 5. DATA-DRIVEN PAYLOAD
-  // Including vendorId and status flags allows the Frontend to gate screens instantly
-  const payload = { 
-    sub: user.id, 
-    email: user.email, 
+  const payload = {
+    sub: user.id,
+    email: user.email,
     role: user.role,
-    vendorId: user.vendor?.id || null 
+    vendorId:
+      user.vendor?.id || null,
   };
 
+  const accessToken =
+    await this.jwtService.signAsync(
+      payload
+    );
+
   return {
-    access_token: await this.jwtService.signAsync(payload),
+    access_token: accessToken,
     user: {
       id: user.id,
       email: user.email,
       role: user.role,
       firstName: user.firstName,
       lastName: user.lastName,
-      vendorId: user.vendor?.id || null,
-      // Vendor Intelligence Flags
-      isVerified: user.vendor?.isVerified || false,
-      kycStatus: user.vendor?.kycStatus || 'NOT_SUBMITTED',
+      vendorId:
+        user.vendor?.id || null,
+      isVerified:
+        user.vendor
+          ?.isVerified || false,
+      kycStatus:
+        user.vendor
+          ?.kycStatus ||
+        'NOT_SUBMITTED',
     },
   };
 }
+private extractClientIp(
+  req: any,
+): string {
+  const forwardedFor =
+    req.headers?.[
+      'x-forwarded-for'
+    ];
+
+  if (
+    typeof forwardedFor ===
+    'string'
+  ) {
+    return forwardedFor
+      .split(',')[0]
+      .trim();
+  }
+
+  return (
+    req.ip ||
+    req.connection
+      ?.remoteAddress ||
+    req.raw?.ip ||
+    '0.0.0.0'
+  );
+}
+  
 }
