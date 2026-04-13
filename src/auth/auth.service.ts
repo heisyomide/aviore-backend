@@ -8,6 +8,7 @@ import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class AuthService {
+  mailQueue: any;
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -65,108 +66,16 @@ async register(registerDto: RegisterDto) {
 // src/auth/auth.service.ts
 
 
-
-async login(
-  loginDto: LoginDto,
-  req: any,
-) {
-  const { email, password } =
-    loginDto;
-
-  const ip =
-    this.extractClientIp(req);
-
-  const device =
-    String(
-      req.headers?.['user-agent'] ||
-        'Unknown Device'
-    );
-
-  const user =
-    await this.prisma.user.findUnique({
-      where: { email },
-      include: {
-        vendor: {
-          select: {
-            id: true,
-            isVerified: true,
-            kycStatus: true,
-          },
-        },
-      },
-    });
-
-  const isPasswordValid =
-    user &&
-    (await bcrypt.compare(
-      password,
-      user.password
-    ));
-
-  if (!user || !isPasswordValid) {
-    await this.prisma.loginLog.create({
-      data: {
-        email,
-        ip,
-        userAgent: device,
-        status: 'FAILED',
-      },
-    });
-
-    throw new UnauthorizedException(
-      'INVALID_CREDENTIALS'
-    );
-  }
-
-  await Promise.all([
-    this.prisma.loginLog.create({
-      data: {
-        email,
-        ip,
-        userAgent: device,
-        status: 'SUCCESS',
-      },
-    }),
-
-    this.usersService.recordSession(
-      user.id,
-      device,
-      ip
-    ),
-  ]);
-
-  const payload = {
-    sub: user.id,
-    email: user.email,
-    role: user.role,
-    vendorId:
-      user.vendor?.id || null,
-  };
-
-  const accessToken =
-    await this.jwtService.signAsync(
-      payload
-    );
-
-  return {
-    access_token: accessToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      vendorId:
-        user.vendor?.id || null,
-      isVerified:
-        user.vendor
-          ?.isVerified || false,
-      kycStatus:
-        user.vendor
-          ?.kycStatus ||
-        'NOT_SUBMITTED',
-    },
-  };
+// src/mail/mail.service.ts
+async sendLoginAlert(userEmail: string, details: any) {
+  await this.mailQueue.add('sendLoginEmail', {
+    userEmail,
+    details,
+  }, {
+    attempts: 3,
+    backoff: 10000,
+    removeOnComplete: true,
+  });
 }
 private extractClientIp(
   req: any,
