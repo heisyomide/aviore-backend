@@ -13,12 +13,18 @@ import { ChatService } from './chat.service';
 import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
+  namespace: 'chat', // Removed the leading slash, Nest handles this
   cors: {
-    origin: process.env.FRONTEND_URL,
+    origin: [
+      'http://localhost:3000',
+      'https://aviore-frontend-v2.vercel.app',
+      process.env.FRONTEND_URL
+    ].filter(Boolean),
     credentials: true,
   },
-  namespace: '/chat',
-  transports: ['websocket'],
+  // 🛡️ Remove the hardcoded transports: ['websocket'] 
+  // Allow the default (polling -> upgrade to websocket)
+  allowEIO3: true, 
 })
 export class ChatGateway
   implements OnGatewayConnection, OnGatewayDisconnect
