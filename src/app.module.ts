@@ -3,12 +3,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bull';
 import { CacheModule } from '@nestjs/cache-manager';
-import { ServeStaticModule } from '@nestjs/serve-static'; // New Import
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { redisStore } from 'cache-manager-redis-yet';
-import { join } from 'path'; // New Import
+import { join } from 'path';
 import * as Joi from 'joi';
 
-// Core Services & Middleware
+// Core Services
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaService } from './prisma.service';
@@ -39,16 +39,14 @@ import { PayoutModule } from './payout/payout.module';
       serveRoot: '/uploads',
     }),
 
- // 🔐 1. ENV VALIDATION (Strict Mode)
+    // 🔐 1. ENV VALIDATION
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: Joi.object({
         NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
-        PORT: Joi.number().default(5000),
+        PORT: Joi.number().default(10000),
         DATABASE_URL: Joi.string().required(),
-        // Redis Validation
-          REDIS_URL: Joi.string().required(),
-        // Extras
+        REDIS_URL: Joi.string().required(),
         FRONTEND_URL: Joi.string().required(),
         CLOUDINARY_CLOUD_NAME: Joi.string().required(),
         RESEND_API_KEY: Joi.string().required(),
@@ -58,51 +56,56 @@ import { PayoutModule } from './payout/payout.module';
     // 🛡️ 2. SECURITY: RATE LIMITING
     ThrottlerModule.forRoot([{
       ttl: 60000,
-      limit: 50, // Increased slightly for marketplace browsing
+      limit: 100, 
     }]),
     
-BullModule.forRootAsync({
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => ({
-    redis: config.get<string>('REDIS_URL'),
+    // 🐂 3. BULL QUEUE (Stability Refactor)
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        url: config.get<string>('REDIS_URL'),
+        redis: {
+          // 🛡️ Guard: Prevents the "Connection is closed" crash
+          maxRetriesPerRequest: null,
+          enableReadyCheck: false,
+          retryStrategy: (times) => Math.min(times * 100, 3000),
+        },
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: true,
+          removeOnFail: false,
+        },
+      }),
+    }),
 
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 5000,
+    // ⚡ 4. CACHE MANAGER (Stability Refactor)
+    CacheModule.registerAsync({
+      isGlobal: true,
+      inject: [ConfigService],
+      useFactory: async (config: ConfigService) => {
+        const store = await redisStore({
+          url: config.get<string>('REDIS_URL'),
+          ttl: 600000,
+          // 🛡️ Handle potential connection drops
+          socket: {
+            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
+          }
+        });
+
+        const client = store.client;
+
+        client.on('error', (err) =>
+          console.error('🔴 Redis Error Logic:', err.message),
+        );
+
+        client.on('ready', () =>
+          console.log('🟢 Redis Node Synchronized'),
+        );
+
+        return { store: store as any };
       },
-      removeOnComplete: true,
-      removeOnFail: false,
-    },
-  }),
-}),
-
-
-CacheModule.registerAsync({
-  isGlobal: true,
-  inject: [ConfigService],
-  useFactory: async (config: ConfigService) => {
-    const store = await redisStore({
-      url: config.get<string>('REDIS_URL'),
-      ttl: 600000, // 10 minutes
-    });
-
-    const client = store.client;
-
-    client.on('error', (err) =>
-      console.error('🔴 Redis Error:', err.message),
-    );
-
-    client.on('ready', () =>
-      console.log('🟢 Redis Connected'),
-    );
-
-    return {
-      store: store as any,
-    };
-  },
-}),
+    }),
     
     // 5. DOMAIN FEATURE MODULES
     AuthModule,
@@ -125,12 +128,9 @@ CacheModule.registerAsync({
   exports: [PrismaService],
 })
 export class AppModule implements NestModule {
- configure(consumer: MiddlewareConsumer) {
-  consumer
-    .apply(FirewallMiddleware)
-    .forRoutes({
-      path: '*',
-      method: RequestMethod.ALL,
-    });
-}
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(FirewallMiddleware)
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
+  }
 }
