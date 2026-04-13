@@ -20,47 +20,93 @@ import { Logger } from '@nestjs/common';
   namespace: '/chat',
   transports: ['websocket'],
 })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
-  server: Server;
+  server!: Server;
 
   private readonly logger = new Logger(ChatGateway.name);
+
+  /**
+   * PRESENCE REGISTRY
+   * userId -> socketId
+   */
+  private readonly onlineUsers = new Map<string, string>();
 
   constructor(private readonly chatService: ChatService) {}
 
   /**
-   * IDENTITY HANDSHAKE
-   * Validates the node and secures the session
+   * SOCKET CONNECTION HANDSHAKE
    */
   async handleConnection(client: Socket) {
     try {
       const token = client.handshake.auth?.token;
-      if (!token) throw new Error('Missing_Handshake_Token');
+
+      if (!token) {
+        throw new Error('Missing token');
+      }
 
       const user = await this.chatService.verifyToken(token);
-      
-      // CRITICAL: Ensure the user object has a valid primary key
-      if (!user || !user.id) throw new Error('Invalid_Identity_Payload');
 
-      client.data.user = user; 
-      
-      // Join a private signaling room for inbox updates
+      if (!user?.id) {
+        throw new Error('Invalid user');
+      }
+
+      client.data.user = user;
+
+      /**
+       * REGISTER ONLINE USER
+       */
+      this.onlineUsers.set(user.id, client.id);
+
+      /**
+       * PRIVATE INBOX ROOM
+       */
       client.join(`inbox_${user.id}`);
-      
-      this.logger.log(`⚡ Node Synchronized: ${user.email}`);
-    } catch (err) {
-      this.logger.warn(`❌ Connection Refused: ${err.message}`);
-      client.disconnect(); 
+
+      this.logger.log(`ONLINE: ${user.email}`);
+    } catch (error: any) {
+      this.logger.warn(`Connection refused: ${error?.message}`);
+      client.disconnect();
     }
   }
 
+  /**
+   * SOCKET DISCONNECT HANDLER
+   */
   handleDisconnect(client: Socket) {
-    this.logger.log(`❌ Node Offline: ${client.id}`);
+    const userId = client.data.user?.id;
+
+    if (userId) {
+      this.onlineUsers.delete(userId);
+    }
+
+    this.logger.log(`OFFLINE: ${client.id}`);
   }
 
   /**
-   * CHANNEL REGISTRY
-   * Links the authenticated node to a specific conversation stream
+   * CHECK VENDOR ONLINE STATUS
+   */
+  @SubscribeMessage('checkVendorStatus')
+  async checkVendorStatus(
+    @MessageBody() vendorUserId: string,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const isOnline = this.onlineUsers.has(vendorUserId);
+
+    client.emit('vendorStatus', {
+      online: isOnline,
+    });
+
+    return {
+      status: 'success',
+      online: isOnline,
+    };
+  }
+
+  /**
+   * JOIN CONVERSATION ROOM
    */
   @SubscribeMessage('joinConversation')
   async handleJoinRoom(
@@ -68,96 +114,149 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
   ) {
     const userId = client.data.user?.id;
-    if (!userId) throw new WsException('Identity_Token_Expired');
 
-    const isParticipant = await this.chatService.isParticipant(conversationId, userId);
-    
-    if (isParticipant) {
-      client.join(conversationId);
-      this.logger.log(`📡 Node ${userId} joined room ${conversationId}`);
-      return { event: 'joined', room: conversationId };
+    if (!userId) {
+      throw new WsException('Identity_Token_Expired');
     }
-    
-    throw new WsException('Forbidden_Registry_Access');
+
+    const isParticipant = await this.chatService.isParticipant(
+      conversationId,
+      userId,
+    );
+
+    if (!isParticipant) {
+      throw new WsException('Forbidden_Registry_Access');
+    }
+
+    client.join(conversationId);
+
+    this.logger.log(
+      `ROOM JOINED: user=${userId} room=${conversationId}`,
+    );
+
+    return {
+      event: 'joined',
+      room: conversationId,
+    };
   }
 
   /**
-   * ATOMIC MESSAGE RELAY
-   * Handles first-time DB creation and standard message persistence
+   * SEND MESSAGE
    */
   @SubscribeMessage('sendMessage')
   async handleMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { 
-      conversationId?: string; 
-      orderId?: string;        
-      vendorId?: string;       
-      content: string; 
+    @MessageBody()
+    payload: {
+      conversationId?: string;
+      orderId?: string;
+      vendorId?: string;
+      content: string;
       senderRole: 'USER' | 'VENDOR';
-      tempId?: string; 
+      tempId?: string;
     },
   ) {
     try {
-      // 1. IDENTITY RESOLUTION
       const senderId = client.data.user?.id;
-      if (!senderId) throw new WsException('Unauthorized_Transmission');
-      if (!payload.content?.trim()) throw new WsException('Empty_Payload');
 
-      let conversation;
+      if (!senderId) {
+        throw new WsException('Unauthorized_Transmission');
+      }
 
-      // 2. ATOMIC SYNC (Fixes Prisma senderId error)
-      if (!payload.conversationId && payload.orderId && payload.vendorId) {
-        // SCENARIO: First message initialization
-        conversation = await this.chatService.initiateConversation({
-          orderId: payload.orderId,
-          userId: senderId,
-          vendorId: payload.vendorId,
-          content: payload.content,
-        });
-        
-        // Auto-join the newly minted CUID room
+      if (!payload.content?.trim()) {
+        throw new WsException('Empty_Payload');
+      }
+
+      let conversation: any;
+
+      /**
+       * CREATE NEW CONVERSATION
+       */
+      if (
+        !payload.conversationId &&
+        payload.orderId &&
+        payload.vendorId
+      ) {
+        conversation =
+          await this.chatService.initiateConversation({
+            orderId: payload.orderId,
+            userId: senderId,
+            vendorId: payload.vendorId,
+            content: payload.content,
+          });
+
         client.join(conversation.id);
-      } else if (payload.conversationId) {
-        // SCENARIO: Standard message relay
+      }
+
+      /**
+       * EXISTING CONVERSATION
+       */
+      else if (payload.conversationId) {
         conversation = await this.chatService.saveMessage({
           conversationId: payload.conversationId,
           content: payload.content,
           senderRole: payload.senderRole,
-          senderId: senderId, // Explicitly passed to fix line 92 error
+          senderId,
         });
       } else {
         throw new WsException('Identity_References_Missing');
       }
 
-      // 3. DATA NORMALIZATION
-      const convId = payload.conversationId || conversation.id;
-      const latestMessage = conversation.messages 
-        ? conversation.messages[conversation.messages.length - 1] 
+      const convId =
+        payload.conversationId || conversation.id;
+
+      const latestMessage = conversation.messages
+        ? conversation.messages[
+            conversation.messages.length - 1
+          ]
         : conversation;
 
-      // 4. MULTICAST BROADCAST
       const broadcastPayload = {
         ...latestMessage,
         conversationId: convId,
-        tempId: payload.tempId 
+        tempId: payload.tempId,
       };
 
-      this.server.to(convId).emit('newMessage', broadcastPayload);
-      
-      // 5. INBOX SIGNALING (For Recipient Sidebar)
-      const recipientId = await this.chatService.getRecipientId(convId, senderId);
+      /**
+       * ROOM BROADCAST
+       */
+      this.server
+        .to(convId)
+        .emit('newMessage', broadcastPayload);
+
+      /**
+       * SIDEBAR INBOX SYNC
+       */
+      const recipientId =
+        await this.chatService.getRecipientId(
+          convId,
+          senderId,
+        );
+
       if (recipientId) {
-        this.server.to(`inbox_${recipientId}`).emit('inbox_sync', {
-          conversationId: convId,
-          snippet: payload.content,
-          updatedAt: broadcastPayload.createdAt
-        });
+        this.server
+          .to(`inbox_${recipientId}`)
+          .emit('inbox_sync', {
+            conversationId: convId,
+            snippet: payload.content,
+            updatedAt: broadcastPayload.createdAt,
+          });
       }
 
-      return { status: 'delivered', conversationId: convId };
-    } catch (error) {
-      this.logger.error(`Transmission Failure: ${error.message}`);
-      return { error: error.message || 'Sync_Failure' };
+      return {
+        status: 'delivered',
+        conversationId: convId,
+      };
+    } catch (error: any) {
+      this.logger.error(
+        `Transmission Failure: ${
+          error?.message || 'Unknown error'
+        }`,
+      );
+
+      return {
+        error: error?.message || 'Sync_Failure',
+      };
     }
   }
 }
