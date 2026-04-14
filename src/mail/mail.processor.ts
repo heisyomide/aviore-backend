@@ -35,30 +35,29 @@ export class MailProcessor implements OnModuleInit {
   private transporter: nodemailer.Transporter;
 
 constructor() {
+  // 🛡️ HARDCODE 465 FOR DEPLOYMENT STABILITY
+  // Render's environment often struggles with the 587 STARTTLS handshake
   const host = process.env.MAIL_HOST || 'smtp.gmail.com';
-  const port = Number(process.env.MAIL_PORT) || 587;
+  const port = 465; 
 
   this.transporter = nodemailer.createTransport({
     host: host,
     port: port,
-    // 🛡️ Logic: secure should be true ONLY for port 465. 
-    // For 587 (STARTTLS), it must be false.
-    secure: port === 465, 
+    secure: true, // 👈 Must be true for 465
     auth: {
       user: process.env.MAIL_USER,
-      pass: process.env.MAIL_PASS, // MUST be a 16-character App Password
+      pass: process.env.MAIL_PASS, // Your 16-character App Password
     },
-    // 🛡️ Stability Settings for Cloud Environments (Render)
     tls: {
-      // Prevents timeout if the server's certificate doesn't perfectly match
+      // Bypasses the certificate depth check which can cause cloud timeouts
       rejectUnauthorized: false,
     },
-    connectionTimeout: 10000, // 10 seconds before giving up
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
+    // 🛡️ Aggressive timeout management
+    connectionTimeout: 20000, // 20 seconds
+    greetingTimeout: 20000,
+    socketTimeout: 30000,
   });
 }
-
   async onModuleInit() {
     try {
       await this.transporter.verify();
