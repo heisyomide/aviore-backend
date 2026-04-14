@@ -34,17 +34,30 @@ export class MailProcessor implements OnModuleInit {
 
   private transporter: nodemailer.Transporter;
 
-  constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: process.env.MAIL_HOST,
-      port: Number(process.env.MAIL_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS,
-      },
-    });
-  }
+constructor() {
+  const host = process.env.MAIL_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.MAIL_PORT) || 587;
+
+  this.transporter = nodemailer.createTransport({
+    host: host,
+    port: port,
+    // 🛡️ Logic: secure should be true ONLY for port 465. 
+    // For 587 (STARTTLS), it must be false.
+    secure: port === 465, 
+    auth: {
+      user: process.env.MAIL_USER,
+      pass: process.env.MAIL_PASS, // MUST be a 16-character App Password
+    },
+    // 🛡️ Stability Settings for Cloud Environments (Render)
+    tls: {
+      // Prevents timeout if the server's certificate doesn't perfectly match
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 10000, // 10 seconds before giving up
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+  });
+}
 
   async onModuleInit() {
     try {

@@ -8,6 +8,7 @@ import { MailProcessor } from './mail.processor';
     // Register the 'mail-queue'
     BullModule.registerQueue({
       name: 'mail-queue',
+      prefix: 'aviore_mail',
     }),
   ],
   providers: [MailService, MailProcessor],
