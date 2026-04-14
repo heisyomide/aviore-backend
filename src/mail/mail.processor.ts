@@ -112,44 +112,55 @@ constructor() {
   /**
    * LOGIN ALERT
    */
-  @Process('sendLoginEmail')
-  async handleLoginEmail(
-    job: Job<LoginEmailJob>,
-  ) {
-    const { userEmail, details } = job.data;
+@Process('sendLoginEmail')
+async handleLoginEmail(job: Job<LoginEmailJob>) {
+  // 1. DATA AUDIT: Check if the job actually arrived and what is inside
+  this.logger.debug(`🔎 DEBUG: Job ${job.id} received. Data: ${JSON.stringify(job.data)}`);
 
-    this.logger.log(
-      `🔐 Sending login alert to ${userEmail}`,
-    );
+  const { userEmail, details } = job.data;
 
-    try {
-      const info = await this.transporter.sendMail({
-        from: `"Aviore Security" <${process.env.MAIL_USER}>`,
-        to: userEmail,
-        subject: '🔐 New Login Detected',
-        html: `
-          <h2>Welcome back ${details.name}</h2>
-          <p>A new login was detected on your account.</p>
-          <p><b>IP:</b> ${details.ip}</p>
-          <p><b>Device:</b> ${details.device}</p>
-          <p>If this was not you, please reset your password immediately.</p>
-        `,
-      });
-
-      this.logger.log(
-        `✅ Login email sent: ${info.messageId}`,
-      );
-
-      return info;
-    } catch (error) {
-      const err = error as Error;
-      this.logger.error(
-        `❌ Login email failed: ${err.message}`,
-      );
-      throw err;
-    }
+  // 2. VALIDATION CHECK: Prevent trying to send to undefined addresses
+  if (!userEmail || !details?.name) {
+    this.logger.error(`❌ DEBUG FAILURE: Missing critical data in job ${job.id}`);
+    return; // Don't throw, just stop.
   }
 
+  this.logger.log(`🔐 Attempting login alert for: ${userEmail}`);
+
+  try {
+    // 3. CONNECTION CHECK: Verify transporter is still alive right before sending
+    // This is the most common place for timeouts to happen silently
+    this.logger.debug(`📡 DEBUG: Verifying SMTP connection...`);
+    await this.transporter.verify(); 
+
+    const info = await this.transporter.sendMail({
+      from: `"Aviore Security" <${process.env.MAIL_USER}>`,
+      to: userEmail,
+      subject: '🔐 New Login Detected',
+      html: `
+        <h2>Welcome back ${details.name}</h2>
+        <p>A new login was detected on your account.</p>
+        <p><b>IP:</b> ${details.ip}</p>
+        <p><b>Device:</b> ${details.device}</p>
+      `,
+    });
+
+    this.logger.log(`✅ SUCCESS: Email ${info.messageId} delivered to provider.`);
+    return info;
+  } catch (error) {
+    const err = error as Error;
+    
+    // 4. ERROR GRANULARITY: Check for specific SMTP codes
+    this.logger.error(`❌ SMTP FATAL: ${err.name} - ${err.message}`);
+    
+    // If it's a timeout, Render's IP might be greylisted by Google
+    if (err.message.includes('timeout')) {
+      this.logger.warn(`⚠️ ADVICE: Port 587 is timing out. Consider switching to Port 465 or Resend/SendGrid.`);
+    }
+
+    throw err; // Rethrow so Bull attempts the 'backoff' strategy
+  }
+}
   /**
    * NEW ORDER EMAIL
    */
