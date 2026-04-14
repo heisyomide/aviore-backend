@@ -114,51 +114,63 @@ constructor() {
    */
 @Process('sendLoginEmail')
 async handleLoginEmail(job: Job<LoginEmailJob>) {
-  // 1. DATA AUDIT: Check if the job actually arrived and what is inside
-  this.logger.debug(`🔎 DEBUG: Job ${job.id} received. Data: ${JSON.stringify(job.data)}`);
+  this.logger.debug(`🔎 DEBUG: Job ${job.id} received.`);
 
   const { userEmail, details } = job.data;
 
-  // 2. VALIDATION CHECK: Prevent trying to send to undefined addresses
   if (!userEmail || !details?.name) {
-    this.logger.error(`❌ DEBUG FAILURE: Missing critical data in job ${job.id}`);
-    return; // Don't throw, just stop.
+    this.logger.error(`❌ DEBUG FAILURE: Missing data in job ${job.id}`);
+    return;
   }
 
-  this.logger.log(`🔐 Attempting login alert for: ${userEmail}`);
-
   try {
-    // 3. CONNECTION CHECK: Verify transporter is still alive right before sending
-    // This is the most common place for timeouts to happen silently
-    this.logger.debug(`📡 DEBUG: Verifying SMTP connection...`);
     await this.transporter.verify(); 
 
     const info = await this.transporter.sendMail({
-      from: `"Aviore Security" <${process.env.MAIL_USER}>`,
+      from: `"Aviorè Security" <${process.env.MAIL_USER}>`,
       to: userEmail,
-      subject: '🔐 New Login Detected',
+      subject: '🔐 Security Alert: New Login Detected',
       html: `
-        <h2>Welcome back ${details.name}</h2>
-        <p>A new login was detected on your account.</p>
-        <p><b>IP:</b> ${details.ip}</p>
-        <p><b>Device:</b> ${details.device}</p>
+        <div style="background-color: #1a1a1a; padding: 40px 20px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #ffffff; text-align: center;">
+          <div style="max-width: 500px; margin: 0 auto; background-color: #262626; border-radius: 12px; padding: 40px; border: 1px solid #333;">
+            
+            <h1 style="color: #ff4d00; margin-bottom: 30px; font-size: 28px; letter-spacing: 2px;">AVIORÈ</h1>
+            
+            <div style="text-align: left; border-top: 1px solid #333; padding-top: 20px;">
+              <h2 style="font-size: 20px; font-weight: 500; margin-bottom: 20px;">New Login Detected</h2>
+              <p style="color: #aaaaaa; font-size: 16px; line-height: 1.5;">
+                Hello ${details.name},<br>
+                A new login was detected for your account. If this was you, you can safely ignore this email.
+              </p>
+              
+              <div style="background-color: #1a1a1a; border-radius: 8px; padding: 20px; margin-top: 25px; border: 1px solid #444;">
+                <p style="margin: 0; font-size: 14px; color: #888;">IP ADDRESS</p>
+                <p style="margin: 5px 0 15px 0; font-size: 16px; color: #ff4d00; font-family: monospace;">${details.ip}</p>
+                
+                <p style="margin: 0; font-size: 14px; color: #888;">DEVICE</p>
+                <p style="margin: 5px 0 0 0; font-size: 16px; color: #ffffff;">${details.device}</p>
+              </div>
+
+              <p style="color: #666; font-size: 13px; margin-top: 30px; line-height: 1.5;">
+                If you did not authorize this login, please <a href="${process.env.FRONTEND_URL}/reset-password" style="color: #ff4d00; text-decoration: none;">reset your password</a> immediately to secure your account.
+              </p>
+            </div>
+
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #333;">
+              <p style="color: #555; font-size: 12px;">© 2026 Aviorè Marketplace. All rights reserved.</p>
+            </div>
+          </div>
+        </div>
       `,
     });
 
-    this.logger.log(`✅ SUCCESS: Email ${info.messageId} delivered to provider.`);
+    this.logger.log(`✅ SUCCESS: Professional Alert delivered to ${userEmail}`);
     return info;
-  } catch (error) {
-    const err = error as Error;
-    
-    // 4. ERROR GRANULARITY: Check for specific SMTP codes
-    this.logger.error(`❌ SMTP FATAL: ${err.name} - ${err.message}`);
-    
-    // If it's a timeout, Render's IP might be greylisted by Google
-    if (err.message.includes('timeout')) {
-      this.logger.warn(`⚠️ ADVICE: Port 587 is timing out. Consider switching to Port 465 or Resend/SendGrid.`);
-    }
-
-    throw err; // Rethrow so Bull attempts the 'backoff' strategy
+} catch (error) {
+    // Cast to Error to access the .message property
+    const err = error as Error; 
+    this.logger.error(`❌ SMTP FATAL: ${err.message}`);
+    throw err;
   }
 }
   /**
