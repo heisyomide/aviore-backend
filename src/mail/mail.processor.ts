@@ -1,17 +1,43 @@
 import { Process, Processor } from '@nestjs/bull';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import type { Job } from 'bull';
 import * as nodemailer from 'nodemailer';
-import { Logger } from '@nestjs/common';
+
+type WelcomeEmailJob = {
+  userEmail: string;
+  details: {
+    name: string;
+    role: string;
+  };
+};
+
+type LoginEmailJob = {
+  userEmail: string;
+  details: {
+    name: string;
+    ip: string;
+    device: string;
+  };
+};
+
+type OrderEmailJob = {
+  vendorEmail: string;
+  orderDetails: {
+    id: string;
+    totalAmount: number;
+  };
+};
 
 @Processor('mail-queue')
-export class MailProcessor {
-  private transporter;
+export class MailProcessor implements OnModuleInit {
   private readonly logger = new Logger(MailProcessor.name);
+
+  private transporter: nodemailer.Transporter;
 
   constructor() {
     this.transporter = nodemailer.createTransport({
       host: process.env.MAIL_HOST,
-      port: Number(process.env.MAIL_PORT),
+      port: Number(process.env.MAIL_PORT) || 587,
       secure: false,
       auth: {
         user: process.env.MAIL_USER,
@@ -20,30 +46,135 @@ export class MailProcessor {
     });
   }
 
-  @Process('sendOrderEmail')
-  async handleSendEmail(job: Job<{ vendorEmail: string; orderDetails: any }>) {
-    const { vendorEmail, orderDetails } = job.data;
-    this.logger.log(`Attempting to send email to ${vendorEmail} for Order ${orderDetails.id}`);
+  async onModuleInit() {
+    try {
+      await this.transporter.verify();
+      this.logger.log('📨 Mail transporter connected successfully');
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(`❌ Mail transporter failed: ${err.message}`);
+    }
+  }
 
-    const mailOptions = {
-      from: `"Aviore Marketplace" <${process.env.MAIL_USER}>`,
-      to: vendorEmail,
-      subject: '🚀 New Order Received!',
-      html: `
-        <h1>You have a new sale!</h1>
-        <p>Order ID: <b>${orderDetails.id}</b></p>
-        <p>Total Amount: <b>₦${orderDetails.totalAmount}</b></p>
-        <p>Log in to your dashboard to process the shipment.</p>
-      `,
-    };
+  /**
+   * WELCOME EMAIL
+   */
+  @Process('sendWelcomeEmail')
+  async handleWelcomeEmail(
+    job: Job<WelcomeEmailJob>,
+  ) {
+    const { userEmail, details } = job.data;
+
+    this.logger.log(
+      `📩 Sending welcome email to ${userEmail}`,
+    );
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`✅ Email sent: ${info.messageId}`);
+      const info = await this.transporter.sendMail({
+        from: `"Aviore Marketplace" <${process.env.MAIL_USER}>`,
+        to: userEmail,
+        subject: '🎉 Welcome to Aviore',
+        html: `
+          <h1>Welcome ${details.name} 👋</h1>
+          <p>Your Aviore account has been created successfully.</p>
+          <p>Account type: <b>${details.role}</b></p>
+          <p>Start listing and selling immediately.</p>
+        `,
+      });
+
+      this.logger.log(
+        `✅ Welcome email sent: ${info.messageId}`,
+      );
+
       return info;
     } catch (error) {
-      this.logger.error(`❌ Failed to send email: ${error.message}`);
-      throw error; // Throwing allows BullMQ to try again based on our 'attempts' config
+      const err = error as Error;
+      this.logger.error(
+        `❌ Welcome email failed: ${err.message}`,
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * LOGIN ALERT
+   */
+  @Process('sendLoginEmail')
+  async handleLoginEmail(
+    job: Job<LoginEmailJob>,
+  ) {
+    const { userEmail, details } = job.data;
+
+    this.logger.log(
+      `🔐 Sending login alert to ${userEmail}`,
+    );
+
+    try {
+      const info = await this.transporter.sendMail({
+        from: `"Aviore Security" <${process.env.MAIL_USER}>`,
+        to: userEmail,
+        subject: '🔐 New Login Detected',
+        html: `
+          <h2>Welcome back ${details.name}</h2>
+          <p>A new login was detected on your account.</p>
+          <p><b>IP:</b> ${details.ip}</p>
+          <p><b>Device:</b> ${details.device}</p>
+          <p>If this was not you, please reset your password immediately.</p>
+        `,
+      });
+
+      this.logger.log(
+        `✅ Login email sent: ${info.messageId}`,
+      );
+
+      return info;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `❌ Login email failed: ${err.message}`,
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * NEW ORDER EMAIL
+   */
+  @Process('sendOrderEmail')
+  async handleOrderEmail(
+    job: Job<OrderEmailJob>,
+  ) {
+    const { vendorEmail, orderDetails } =
+      job.data;
+
+    this.logger.log(
+      `🛒 Sending order email to ${vendorEmail}`,
+    );
+
+    try {
+      const info = await this.transporter.sendMail({
+        from: `"Aviore Marketplace" <${process.env.MAIL_USER}>`,
+        to: vendorEmail,
+        subject: '🚀 New Order Received!',
+        html: `
+          <h1>You have a new sale 🎉</h1>
+          <p>Order ID: <b>${orderDetails.id}</b></p>
+          <p>Total Amount: <b>₦${orderDetails.totalAmount}</b></p>
+          <p>Log in to your dashboard to process shipment.</p>
+        `,
+      });
+
+      this.logger.log(
+        `✅ Order email sent: ${info.messageId}`,
+      );
+
+      return info;
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(
+        `❌ Order email failed: ${err.message}`,
+      );
+      throw err;
     }
   }
 }

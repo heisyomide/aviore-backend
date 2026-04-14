@@ -5,6 +5,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto, UserRole } from './dto/register.dto'; // Ensure you have this DTO
 import * as bcrypt from 'bcrypt';
 import { UsersService } from 'src/users/users.service';
+import { MailService } from 'src/mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -12,6 +13,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private usersService: UsersService,
+    private mailService: MailService
   ) {}
 
 async register(registerDto: RegisterDto) {
@@ -28,30 +30,40 @@ async register(registerDto: RegisterDto) {
   try {
     // 2. Wrap in a transaction to ensure data integrity
     return await this.prisma.$transaction(async (tx) => {
-      const newUser = await tx.user.create({
-        data: {
-          email,
-          password: hashedPassword,
-          firstName, 
-          lastName,
-          role: role || UserRole.CUSTOMER,
-          // 3. Conditional nested creation
-          ...(role === UserRole.VENDOR && {
-            vendor: {
-              create: {
-                storeName: storeName || (firstName ? `${firstName}'s Shop` : email.split('@')[0]),
-                // Good practice: Initialize a wallet for the vendor here if needed
-                vendorWallet: { create: {} } 
-              },
-            },
-          }),
+    const newUser = await tx.user.create({
+  data: {
+    email,
+    password: hashedPassword,
+    firstName,
+    lastName,
+    role: role || UserRole.CUSTOMER,
+    ...(role === UserRole.VENDOR && {
+      vendor: {
+        create: {
+          storeName:
+            storeName ||
+            (firstName
+              ? `${firstName}'s Shop`
+              : email.split('@')[0]),
+          vendorWallet: { create: {} },
         },
-        include: { 
-          vendor: true 
-        },
-      });
+      },
+    }),
+  },
+  include: {
+    vendor: true,
+  },
+});
 
-      return newUser;
+await this.mailService.sendWelcomeEmail(
+  newUser.email,
+  {
+    name: newUser.firstName || 'User',
+    role: newUser.role,
+  },
+);
+
+return newUser;
     });
   } catch (error: any) {
     // Handle specific Prisma errors (e.g., P2002 for unique constraint on storeName)
@@ -119,21 +131,30 @@ async login(
   }
 
   await Promise.all([
-    this.prisma.loginLog.create({
-      data: {
-        email,
-        ip,
-        userAgent: device,
-        status: 'SUCCESS',
-      },
-    }),
+  this.prisma.loginLog.create({
+    data: {
+      email,
+      ip,
+      userAgent: device,
+      status: 'SUCCESS',
+    },
+  }),
 
-    this.usersService.recordSession(
-      user.id,
+  this.usersService.recordSession(
+    user.id,
+    device,
+    ip,
+  ),
+
+  this.mailService.sendLoginAlert(
+    user.email,
+    {
+      ip,
       device,
-      ip
-    ),
-  ]);
+      name: user.firstName || 'User',
+    },
+  ),
+]);
 
   const payload = {
     sub: user.id,
