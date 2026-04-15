@@ -1,19 +1,18 @@
-import { defineConfig } from "@prisma/config";
-import * as dotenv from "dotenv";
-import path from "path";
+// prisma.config.ts
+import "dotenv/config";   // ← This must be the VERY FIRST line
+import { defineConfig, env } from "prisma/config";
 
-// Load environment variables early
-dotenv.config({ path: path.join(__dirname, ".env") });
+console.log("DEBUG: DIRECT_URL loaded =", !!process.env.DIRECT_URL ? "YES" : "NO");
+console.log("DEBUG: DIRECT_URL starts with postgresql:// =", process.env.DIRECT_URL?.startsWith("postgresql://") || false);
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
+
   datasource: {
-    // In Prisma 7, this is where the engine looks for the URL during generation
-    url: process.env.DIRECT_URL,
+    url: env("DIRECT_URL"),     // Use env() — it will throw a clear error if missing
   },
+
   migrations: {
-    // This tells Prisma to use ts-node to run your seed script
-    seed: "ts-node prisma/seed.ts",
-    path: 'prisma/migrations',
+    path: "prisma/migrations",
   },
 });
