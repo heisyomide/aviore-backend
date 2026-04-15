@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   Request,
+  Logger,
 } from '@nestjs/common';
 import { WishlistService } from './wishlist.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -13,46 +14,54 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 @Controller('wishlist')
 @UseGuards(JwtAuthGuard)
 export class WishlistController {
+  private readonly logger = new Logger(
+    WishlistController.name,
+  );
+
   constructor(
     private readonly wishlistService: WishlistService,
   ) {}
 
   @Post(':productId')
-  add(
+  async add(
     @Request() req,
     @Param('productId') productId: string,
   ) {
+    this.logger.log(
+      `Wishlist add request from user ${req.user?.id}`,
+    );
+
     return this.wishlistService.addToWishlist(
-      req.user.sub,
+      req.user.id,
       productId,
     );
   }
 
   @Delete(':productId')
-  remove(
+  async remove(
     @Request() req,
     @Param('productId') productId: string,
   ) {
     return this.wishlistService.removeFromWishlist(
-      req.user.sub,
+      req.user.id,
       productId,
     );
   }
 
   @Get()
-  getWishlist(@Request() req) {
+  async getWishlist(@Request() req) {
     return this.wishlistService.getUserWishlist(
-      req.user.sub,
+      req.user.id,
     );
   }
 
   @Get('check/:productId')
-  check(
+  async check(
     @Request() req,
     @Param('productId') productId: string,
   ) {
     return this.wishlistService.isWishlisted(
-      req.user.sub,
+      req.user.id,
       productId,
     );
   }
