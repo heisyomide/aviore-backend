@@ -29,6 +29,7 @@ import { ChatModule } from './chat/chat.module';
 import { StorefrontModule } from './storefront/storefront.module';
 import { CartModule } from './cart/cart.module';
 import { PayoutModule } from './payout/payout.module';
+import { WishlistModule } from './wishlist/wishlist.module';
 
 @Global()
 @Module({
@@ -128,6 +129,7 @@ BullModule.forRootAsync({
     StorefrontModule,
     CartModule,
     PayoutModule,
+    WishlistModule,
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

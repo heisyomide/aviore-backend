@@ -14,5 +14,6 @@ export default defineConfig({
   migrations: {
     // This tells Prisma to use ts-node to run your seed script
     seed: "ts-node prisma/seed.ts",
+    path: 'prisma/migrations',
   },
 });
