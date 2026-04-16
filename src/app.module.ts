@@ -30,6 +30,7 @@ import { StorefrontModule } from './storefront/storefront.module';
 import { CartModule } from './cart/cart.module';
 import { PayoutModule } from './payout/payout.module';
 import { WishlistModule } from './wishlist/wishlist.module';
+import { BannerModule } from './admin/banner/banner.module';
 
 @Global()
 @Module({
@@ -130,6 +131,7 @@ BullModule.forRootAsync({
     CartModule,
     PayoutModule,
     WishlistModule,
+    BannerModule,
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

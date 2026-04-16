@@ -103,6 +103,22 @@ model NotificationSetting {
   pushEnabled   Boolean @default(true)
 }
 
+
+model Banner {
+  id          String   @id @default(uuid())
+  title       String
+  subtitle    String?
+  tag         String
+  imageUrl    String
+  discount    String?
+  bgColor     String?
+  accentColor String?
+  isActive    Boolean  @default(true)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 // Add this line to your User model:
 // notificationSettings NotificationSetting?
 
