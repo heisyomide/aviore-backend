@@ -103,7 +103,6 @@ model NotificationSetting {
   pushEnabled   Boolean @default(true)
 }
 
-
 model Banner {
   id          String   @id @default(uuid())
   title       String
@@ -139,12 +138,12 @@ model Address {
 }
 
 model Wishlist {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -333,6 +332,7 @@ model Product {
   stock            Int               @default(0)
   sku              String?           @unique
   status           ProductStatus     @default(PENDING)
+  variants         Variant[]
   isActive         Boolean           @default(true)
   isDeleted        Boolean           @default(false)
   vendor           Vendor            @relation(fields: [vendorId], references: [id])
@@ -367,6 +367,22 @@ model ProductImage {
   imageUrl  String
   product   Product @relation(fields: [productId], references: [id])
   productId String
+}
+
+model Variant {
+  id        String         @id @default(uuid())
+  color     String
+  sizes     String[] // flexible sizes
+  product   Product        @relation(fields: [productId], references: [id])
+  productId String
+  images    VariantImage[]
+}
+
+model VariantImage {
+  id        String  @id @default(uuid())
+  imageUrl  String
+  variant   Variant @relation(fields: [variantId], references: [id])
+  variantId String
 }
 
 model Order {

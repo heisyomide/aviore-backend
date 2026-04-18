@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma.service';
 import { CreateProductDto } from './dto/product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
+import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 
 @Injectable()
 export class ProductsService {
@@ -11,33 +12,69 @@ export class ProductsService {
   /**
    * CREATE_PRODUCT_PROTOCOL
    */
-  async create(dto: CreateProductDto, userId: string) {
-    const vendor = await this.prisma.vendor.findUnique({
-      where: { userId },
-    });
+async create(dto: CreateProductDto, userId: string) {
+  const vendor = await this.prisma.vendor.findUnique({
+    where: { userId },
+  });
 
-    if (!vendor) {
-      throw new UnauthorizedException('VENDOR_REGISTRATION_INCOMPLETE: Cannot list items.');
-    }
-
-    const { images, ...data } = dto;
-
-    return this.prisma.product.create({
-      data: {
-        ...data,
-        vendorId: vendor.id,
-        images: {
-          create: images?.map((url) => ({ imageUrl: url })) || [],
-        },
-      },
-      include: {
-        category: { select: { name: true } },
-        images: true,
-        vendor: { select: { storeName: true } }
-      }
-    });
+  if (!vendor) {
+    throw new UnauthorizedException(
+      'VENDOR_REGISTRATION_INCOMPLETE: Cannot list items.',
+    );
   }
 
+  const { images, variants, ...data } = dto;
+
+  // 🚨 RULE: Must have either images or variants
+  if (!images?.length && !variants?.length) {
+    throw new BadRequestException(
+      'Product must have images or variants',
+    );
+  }
+
+  return this.prisma.product.create({
+    data: {
+      ...data,
+      vendorId: vendor.id,
+
+      // ✅ Default Images (for non-variant products)
+      images: {
+        create: images?.map((url) => ({
+          imageUrl: url,
+        })) || [],
+      },
+
+      // 🔥 VARIANTS SUPPORT
+      variants: variants
+        ? {
+            create: variants.map((variant) => ({
+              color: variant.color,
+              sizes: variant.sizes, // assuming JSON column
+
+              images: {
+                create: variant.images.map((url) => ({
+                  imageUrl: url,
+                })),
+              },
+            })),
+          }
+        : undefined,
+    },
+
+    include: {
+      category: { select: { name: true } },
+      images: true,
+      vendor: { select: { storeName: true } },
+
+      // 🔥 include variants
+      variants: {
+        include: {
+          images: true,
+        },
+      },
+    },
+  });
+}
   /**
    * GLOBAL_CATALOG_QUERY (The Shop Engine)
    * Fixed: Added 'sort' to the parameters type definition.
@@ -88,26 +125,33 @@ export class ProductsService {
     };
 
     // 4. OPTIMIZED DATA FETCH
-    const [data, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
+   const [data, total] = await Promise.all([
+  this.prisma.product.findMany({
+    where,
+    include: {
+      category: {
         include: {
-          category: {
-            include: {
-              parent: {
-                include: { parent: true }
-              }
-            }
+          parent: {
+            include: { parent: true },
           },
-          images: { select: { imageUrl: true } },
-          vendor: { select: { storeName: true } },
         },
-        skip,
-        take: Number(limit),
-        orderBy,
-      }),
-      this.prisma.product.count({ where }),
-    ]);
+      },
+      images: { select: { imageUrl: true } },
+      vendor: { select: { storeName: true } },
+
+      // 🔥 FIX
+      variants: {
+        include: {
+          images: true,
+        },
+      },
+    },
+    skip,
+    take: Number(limit),
+    orderBy,
+  }),
+  this.prisma.product.count({ where }),
+]);
 
     return {
       data,
@@ -128,39 +172,48 @@ async findOne(id: string) {
     where: { id },
     include: {
       images: { select: { imageUrl: true } },
+
+      // 🔥 ADD THIS
+      variants: {
+        include: {
+          images: true,
+        },
+      },
+
       category: {
         include: {
           parent: {
-            include: { parent: true }
-          }
-        }
+            include: { parent: true },
+          },
+        },
       },
-      // 🚀 Include Vendor Stats for the follow section
+
       vendor: {
         include: {
-          _count: { select: { followers: true, products: true } }
-        }
+          _count: {
+            select: { followers: true, products: true },
+          },
+        },
       },
-      // 🚀 FIX: Include Reviews and the User who wrote them
+
       reviews: {
         include: {
           user: {
             select: {
               firstName: true,
               lastName: true,
-              // image: true, // Include this if you have user profile pictures
-            }
-          }
+            },
+          },
         },
-        orderBy: {
-          createdAt: 'desc' // Show newest reviews first
-        }
-      }
-    }
+        orderBy: { createdAt: 'desc' },
+      },
+    },
   });
 
   if (!product || product.isDeleted) {
-    throw new NotFoundException(`Product with ID ${id} not found`);
+    throw new NotFoundException(
+      `Product with ID ${id} not found`,
+    );
   }
 
   return product;
@@ -201,30 +254,46 @@ async findByVendor(userId: string, campaignId?: string) {
   /**
    * UPDATE_PRODUCT_PROTOCOL
    */
-  async update(id: string, dto: UpdateProductDto, userId: string) {
-    const product = await this.prisma.product.findFirst({
-      where: { id, vendor: { userId } }
-    });
+async update(id: string, dto: UpdateProductDto, userId: string) {
+  const product = await this.prisma.product.findFirst({
+    where: { id, vendor: { userId } },
+  });
 
-    if (!product) throw new NotFoundException('RESOURCE_NOT_FOUND: Unauthorized access.');
-
-    const { images, ...data } = dto;
-
-    return this.prisma.product.update({
-      where: { id },
-      data: {
-        ...data,
-        ...(images && {
-          images: {
-            deleteMany: {},
-            create: images.map((url) => ({ imageUrl: url })),
-          },
-        }),
-      },
-      include: { images: true }
-    });
+  if (!product) {
+    throw new NotFoundException('RESOURCE_NOT_FOUND');
   }
 
+  const { images, variants, ...data } = dto;
+
+  // 🚨 Prevent breaking variant structure
+  if (variants) {
+    throw new BadRequestException(
+      'Variant updates not supported yet',
+    );
+  }
+
+  return this.prisma.product.update({
+    where: { id },
+    data: {
+      ...data,
+
+      ...(images && {
+        images: {
+          deleteMany: {},
+          create: images.map((url) => ({
+            imageUrl: url,
+          })),
+        },
+      }),
+    },
+    include: {
+      images: true,
+      variants: {
+        include: { images: true },
+      },
+    },
+  });
+}
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
    */
@@ -312,6 +381,93 @@ async addReview(productId: string, userId: string, dto: { rating: number; commen
     });
 
     return review;
+  });
+}
+
+async addVariant(productId: string, dto: CreateVariantDto, userId: string) {
+  const product = await this.prisma.product.findFirst({
+    where: { id: productId, vendor: { userId } },
+  });
+
+  if (!product) {
+    throw new NotFoundException('Product not found or unauthorized');
+  }
+
+  return this.prisma.variant.create({
+    data: {
+      productId,
+      color: dto.color,
+      sizes: dto.sizes,
+
+      images: {
+        create: dto
+        .images.map((url) => ({
+          imageUrl: url,
+        })),
+      },
+    },
+    include: {
+      images: true,
+    },
+  });
+}
+
+async updateVariant(
+  variantId: string,
+  dto: UpdateVariantDto,
+  userId: string,
+) {
+  const variant = await this.prisma.variant.findUnique({
+    where: { id: variantId },
+    include: {
+      product: {
+        include: { vendor: true },
+      },
+    },
+  });
+
+  if (!variant || variant.product.vendor.userId !== userId) {
+    throw new ForbiddenException('Unauthorized');
+  }
+
+  const { images, ...data } = dto;
+
+  return this.prisma.variant.update({
+    where: { id: variantId },
+    data: {
+      ...data,
+
+      ...(images && {
+        images: {
+          deleteMany: {},
+          create: images.map((url) => ({
+            imageUrl: url,
+          })),
+        },
+      }),
+    },
+    include: {
+      images: true,
+    },
+  });
+}
+
+async deleteVariant(variantId: string, userId: string) {
+  const variant = await this.prisma.variant.findUnique({
+    where: { id: variantId },
+    include: {
+      product: {
+        include: { vendor: true },
+      },
+    },
+  });
+
+  if (!variant || variant.product.vendor.userId !== userId) {
+    throw new ForbiddenException('Unauthorized');
+  }
+
+  return this.prisma.variant.delete({
+    where: { id: variantId },
   });
 }
 }

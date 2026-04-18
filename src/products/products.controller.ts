@@ -13,6 +13,7 @@ import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ThrottlerGuard , Throttle} from '@nestjs/throttler';
+import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 
 @ApiTags('Product Registry')
 @Controller('products')
@@ -122,4 +123,41 @@ export class ProductsController {
     return this.productsService.addReview(productId, req.user.id, dto);
   }
 
+
+  @Post(':productId/variants')
+addVariant(
+  @Param('productId') productId: string,
+  @Body() dto: CreateVariantDto,
+  @Req() req,
+) {
+  return this.productsService.addVariant(
+    productId,
+    dto,
+    req.user.id,
+  );
+}
+
+@Patch('variants/:variantId')
+updateVariant(
+  @Param('variantId') variantId: string,
+  @Body() dto: UpdateVariantDto,
+  @Req() req,
+) {
+  return this.productsService.updateVariant(
+    variantId,
+    dto,
+    req.user.id,
+  );
+}
+
+@Delete('variants/:variantId')
+deleteVariant(
+  @Param('variantId') variantId: string,
+  @Req() req,
+) {
+  return this.productsService.deleteVariant(
+    variantId,
+    req.user.id,
+  );
+}
 }

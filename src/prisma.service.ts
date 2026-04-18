@@ -6,6 +6,13 @@ import { Pool } from 'pg';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
+  private _variant: any;
+  public get variant(): any {
+    return this._variant;
+  }
+  public set variant(value: any) {
+    this._variant = value;
+  }
 
   constructor() {
     // 🚀 USE DATABASE_URL (Port 6543) for the Pool
