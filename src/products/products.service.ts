@@ -249,43 +249,80 @@ async findByVendor(userId: string, campaignId?: string) {
    * UPDATE_PRODUCT_PROTOCOL
    */
 async update(id: string, dto: UpdateProductDto, userId: string) {
-  const product = await this.prisma.product.findFirst({
-    where: { id, vendor: { userId } },
-  });
+  return this.prisma.$transaction(async (tx) => {
+    // 🔍 1. Find product with ownership check
+    const product = await tx.product.findFirst({
+      where: { id, vendor: { userId } },
+      include: { images: true },
+    });
 
-  if (!product) {
-    throw new NotFoundException('RESOURCE_NOT_FOUND');
-  }
+    if (!product) {
+      throw new NotFoundException('RESOURCE_NOT_FOUND');
+    }
 
-  const { images, variants, ...data } = dto;
+    const { images, variants, ...data } = dto;
 
-  // 🚨 Prevent breaking variant structure
-  if (variants) {
-    throw new BadRequestException(
-      'Variant updates not supported yet',
-    );
-  }
+    // 🚫 2. Block variants (explicit + safe)
+    if (variants) {
+      throw new BadRequestException(
+        'Variant updates not supported yet'
+      );
+    }
 
-  return this.prisma.product.update({
-    where: { id },
-    data: {
-      ...data,
+    // 🧹 3. Normalize + validate images
+    const normalizedImages =
+      Array.isArray(images)
+        ? images
+            .filter(
+              (url) =>
+                typeof url === 'string' &&
+                url.trim().length > 0
+            )
+            .map((url) => url.trim())
+        : undefined;
 
-      ...(images && {
-        images: {
-          deleteMany: {},
-          create: images.map((url) => ({
-            imageUrl: url,
-          })),
+    // 🔄 4. Diff existing vs incoming images
+    let imageOps: Prisma.ProductUpdateInput['images']  | undefined;
+
+    if (normalizedImages) {
+      const existingUrls = product.images.map(
+        (img) => img.imageUrl
+      );
+
+      const toAdd = normalizedImages.filter(
+        (url) => !existingUrls.includes(url)
+      );
+
+      const toDelete = existingUrls.filter(
+        (url) => !normalizedImages.includes(url)
+      );
+
+      imageOps = {
+        deleteMany: {
+          imageUrl: { in: toDelete },
         },
-      }),
-    },
-    include: {
-      images: true,
-      variants: {
-        include: { images: true },
+        create: toAdd.map((url) => ({
+          imageUrl: url,
+        })),
+      };
+    }
+
+    // 💾 5. Update product
+    const updated = await tx.product.update({
+      where: { id },
+      data: {
+        ...data,
+        ...(imageOps ? { images: imageOps } : {}),
       },
-    },
+      include: {
+        images: true,
+        variants: {
+          include: { images: true },
+        },
+      },
+    });
+
+    return updated;
   });
 }
   /**
