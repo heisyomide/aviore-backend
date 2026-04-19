@@ -249,71 +249,77 @@ async findByVendor(userId: string, campaignId?: string) {
    * UPDATE_PRODUCT_PROTOCOL
    */
 async update(id: string, dto: UpdateProductDto, userId: string) {
+  const product = await this.prisma.product.findFirst({
+    where: { id, vendor: { userId } },
+    include: { variants: true },
+  });
+
+  if (!product) {
+    throw new NotFoundException('RESOURCE_NOT_FOUND');
+  }
+
+  const { images, variants, ...data } = dto;
+
   return this.prisma.$transaction(async (tx) => {
-    // 🔍 1. Find product with ownership check
-    const product = await tx.product.findFirst({
-      where: { id, vendor: { userId } },
-      include: { images: true },
-    });
-
-    if (!product) {
-      throw new NotFoundException('RESOURCE_NOT_FOUND');
-    }
-
-    const { images, variants, ...data } = dto;
-
-    // 🚫 2. Block variants (explicit + safe)
-    if (variants) {
-      throw new BadRequestException(
-        'Variant updates not supported yet'
-      );
-    }
-
-    // 🧹 3. Normalize + validate images
-    const normalizedImages =
-      Array.isArray(images)
-        ? images
-            .filter(
-              (url) =>
-                typeof url === 'string' &&
-                url.trim().length > 0
-            )
-            .map((url) => url.trim())
-        : undefined;
-
-    // 🔄 4. Diff existing vs incoming images
-    let imageOps: Prisma.ProductUpdateInput['images']  | undefined;
-
-    if (normalizedImages) {
-      const existingUrls = product.images.map(
-        (img) => img.imageUrl
-      );
-
-      const toAdd = normalizedImages.filter(
-        (url) => !existingUrls.includes(url)
-      );
-
-      const toDelete = existingUrls.filter(
-        (url) => !normalizedImages.includes(url)
-      );
-
-      imageOps = {
-        deleteMany: {
-          imageUrl: { in: toDelete },
-        },
-        create: toAdd.map((url) => ({
-          imageUrl: url,
-        })),
-      };
-    }
-
-    // 💾 5. Update product
-    const updated = await tx.product.update({
+    // ✅ 1. Update base product
+    const updatedProduct = await tx.product.update({
       where: { id },
       data: {
         ...data,
-        ...(imageOps ? { images: imageOps } : {}),
       },
+    });
+
+    // ✅ 2. Sync product images
+    if (images) {
+      await tx.productImage.deleteMany({
+        where: { productId: id },
+      });
+
+      await tx.productImage.createMany({
+        data: images.map((url) => ({
+          imageUrl: url,
+          productId: id,
+        })),
+      });
+    }
+
+    // ✅ 3. Sync variants (FULL REPLACE STRATEGY)
+    if (variants) {
+      // delete old variants + images
+      await tx.variantImage.deleteMany({
+        where: {
+          variant: { productId: id },
+        },
+      });
+
+      await tx.variant.deleteMany({
+        where: { productId: id },
+      });
+
+      // recreate variants
+      for (const variant of variants) {
+        const createdVariant = await tx.variant.create({
+          data: {
+            productId: id,
+            color: variant.color,
+            sizes: variant.sizes, // assumes JSON column
+          },
+        });
+
+        if (variant.images?.length) {
+          await tx.variantImage.createMany({
+            data: variant.images.map((img) => ({
+              imageUrl: img,
+              variantId: createdVariant.id,
+            })),
+          });
+        }
+      }
+    }
+
+    // ✅ 4. Return fresh structure
+    return tx.product.findUnique({
+      where: { id },
       include: {
         images: true,
         variants: {
@@ -321,8 +327,6 @@ async update(id: string, dto: UpdateProductDto, userId: string) {
         },
       },
     });
-
-    return updated;
   });
 }
   /**
