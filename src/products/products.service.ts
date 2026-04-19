@@ -26,11 +26,9 @@ async create(dto: CreateProductDto, userId: string) {
   const { images, variants, ...data } = dto;
 
   // 🚨 RULE: Must have either images or variants
-  if (!images?.length && !variants?.length) {
-    throw new BadRequestException(
-      'Product must have images or variants',
-    );
-  }
+if (!variants?.length) {
+  throw new BadRequestException('Product must have variants');
+}
 
   return this.prisma.product.create({
     data: {
@@ -38,11 +36,7 @@ async create(dto: CreateProductDto, userId: string) {
       vendorId: vendor.id,
 
       // ✅ Default Images (for non-variant products)
-      images: {
-        create: images?.map((url) => ({
-          imageUrl: url,
-        })) || [],
-      },
+images: { create: []},
 
       // 🔥 VARIANTS SUPPORT
       variants: variants

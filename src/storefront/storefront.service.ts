@@ -10,11 +10,16 @@ export class StorefrontService {
    * 🛡️ TYPE-SAFE INCLUDE HELPER
    * Centralized to ensure UI consistency across all methods.
    */
-  private readonly productIncludes = {
-    images: {
-      take: 1,
-      select: { imageUrl: true }
-    },
+private readonly productIncludes = {
+  variants: {
+    take: 1,
+    include: {
+      images: {
+        take: 1,
+        select: { imageUrl: true }
+      }
+    }
+  },
     vendor: { 
       select: { 
         id: true,
@@ -83,10 +88,12 @@ export class StorefrontService {
         id: category.id,
         title: category.name,
         slug: category.slug,
-        data: products.map(p => ({
-          ...p,
-          image: p.images?.[0]?.imageUrl || '/placeholder.png',
-        })),
+       data: products.map(p => ({
+  ...p,
+  image:
+    p.variants?.[0]?.images?.[0]?.imageUrl ||
+    '/placeholder.png',
+})),
       };
     })),
 this.prisma.vendor.findMany({
