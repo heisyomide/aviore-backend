@@ -23,7 +23,29 @@ async create(dto: CreateProductDto, userId: string) {
     );
   }
 
-  const { images, variants, ...data } = dto;
+  const { images, variants, ...data } = dto ;
+
+
+  // ✅ ORIGIN + DELIVERY VALIDATION
+if (data.origin === 'INTERNATIONAL') {
+  if (!data.deliveryMin || !data.deliveryMax) {
+    throw new BadRequestException(
+      'INTERNATIONAL products must include deliveryMin and deliveryMax',
+    );
+  }
+
+  if (data.deliveryMin > data.deliveryMax) {
+    throw new BadRequestException(
+      'deliveryMin cannot be greater than deliveryMax',
+    );
+  }
+}
+
+// ✅ AUTO FIX FOR LOCAL
+if (data.origin === 'LOCAL') {
+  data.deliveryMin = 1;
+  data.deliveryMax = 3;
+}
 
   // 🚨 RULE: Must have either images or variants
 if (!variants?.length) {
@@ -73,89 +95,110 @@ images: { create: []},
    * GLOBAL_CATALOG_QUERY (The Shop Engine)
    * Fixed: Added 'sort' to the parameters type definition.
    */
-  async findAll(params: {
-    search?: string;
-    categoryId?: string;
-    page?: number;
-    limit?: number;
-    sort?: 'price_asc' | 'price_desc' | 'newest';
-  }) {
-    const { search, categoryId, page = 1, limit = 10, sort } = params;
-    const skip = (page - 1) * limit;
+async findAll(params: {
+  search?: string;
+  categoryId?: string;
+  page?: number;
+  limit?: number;
+  sort?: 'price_asc' | 'price_desc' | 'newest';
+}) {
+  const { search, categoryId, page = 1, limit = 10, sort } = params;
+  const skip = (page - 1) * limit;
 
-    // 1. DYNAMIC SORTING LOGIC
-    let orderBy: Prisma.ProductOrderByWithRelationInput = { createdAt: 'desc' };
-    if (sort === 'price_asc') orderBy = { price: 'asc' };
-    if (sort === 'price_desc') orderBy = { price: 'desc' };
+  // 1. SORTING
+  let orderBy: Prisma.ProductOrderByWithRelationInput = { createdAt: 'desc' };
+  if (sort === 'price_asc') orderBy = { price: 'asc' };
+  if (sort === 'price_desc') orderBy = { price: 'desc' };
 
-    // 2. RECURSIVE CATEGORY RESOLUTION
-    let categoryFilter: Prisma.ProductWhereInput = {};
+  // 2. CATEGORY FILTER
+  let categoryFilter: Prisma.ProductWhereInput = {};
 
-    if (categoryId) {
-      categoryFilter = {
-        category: {
-          OR: [
-            { id: categoryId },
-            { slug: categoryId },
-            { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } },
-            { parent: { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } } }
-          ]
-        }
-      };
-    }
-
-    // 3. CONSOLIDATED WHERE CLAUSE
-    const where: Prisma.ProductWhereInput = {
-      isDeleted: false,
-      isActive: true,
-      status: 'APPROVED',
-      ...categoryFilter,
-      ...(search && {
-        OR: [
-          { title: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
-    };
-
-    // 4. OPTIMIZED DATA FETCH
-   const [data, total] = await Promise.all([
-  this.prisma.product.findMany({
-    where,
-    include: {
+  if (categoryId) {
+    categoryFilter = {
       category: {
-        include: {
-          parent: {
-            include: { parent: true },
-          },
-        },
-      },
-      images: { select: { imageUrl: true } },
-      vendor: { select: { storeName: true } },
-
-      // 🔥 FIX
-      variants: {
-        include: {
-          images: true,
-        },
-      },
-    },
-    skip,
-    take: Number(limit),
-    orderBy,
-  }),
-  this.prisma.product.count({ where }),
-]);
-
-    return {
-      data,
-      meta: {
-        total,
-        page: Number(page),
-        lastPage: Math.ceil(total / limit),
+        OR: [
+          { id: categoryId },
+          { slug: categoryId },
+          { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } },
+          { parent: { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } } },
+        ],
       },
     };
   }
+
+  // 3. WHERE
+  const where: Prisma.ProductWhereInput = {
+    isDeleted: false,
+    isActive: true,
+    status: 'APPROVED',
+    ...categoryFilter,
+    ...(search && {
+      OR: [
+        { title: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ],
+    }),
+  };
+
+  // 4. FETCH
+  const [rawData, total] = await Promise.all([
+    this.prisma.product.findMany({
+      where,
+      include: {
+        category: {
+          include: {
+            parent: {
+              include: { parent: true },
+            },
+          },
+        },
+        images: { select: { imageUrl: true } },
+        vendor: { select: { storeName: true } },
+        variants: {
+          include: {
+            images: true,
+          },
+        },
+      },
+      skip,
+      take: Number(limit),
+      orderBy,
+    }),
+    this.prisma.product.count({ where }),
+  ]);
+
+  // 🔥 5. NORMALIZE IMAGES (CRITICAL FIX)
+  const data = rawData.map((product) => {
+    const hasVariantImages = product.variants.some(
+      (v) => v.images && v.images.length > 0,
+    );
+
+    if (!hasVariantImages && product.images.length) {
+      return {
+        ...product,
+        variants: product.variants.map((v) => ({
+          ...v,
+          images: product.images.map((img) => ({
+  id: 'fallback-' + img.imageUrl,
+  imageUrl: img.imageUrl,
+  variantId: v.id,
+}))
+        })),
+      };
+    }
+
+    return product;
+  });
+
+  return {
+    data,
+    meta: {
+      total,
+      page: Number(page),
+      lastPage: Math.ceil(total / limit),
+    },
+  };
+}
 
   /**
    * SINGLE_PRODUCT_QUERY
@@ -166,14 +209,11 @@ async findOne(id: string) {
     where: { id },
     include: {
       images: { select: { imageUrl: true } },
-
-      // 🔥 ADD THIS
       variants: {
         include: {
           images: true,
         },
       },
-
       category: {
         include: {
           parent: {
@@ -181,7 +221,6 @@ async findOne(id: string) {
           },
         },
       },
-
       vendor: {
         include: {
           _count: {
@@ -189,7 +228,6 @@ async findOne(id: string) {
           },
         },
       },
-
       reviews: {
         include: {
           user: {
@@ -205,9 +243,23 @@ async findOne(id: string) {
   });
 
   if (!product || product.isDeleted) {
-    throw new NotFoundException(
-      `Product with ID ${id} not found`,
-    );
+    throw new NotFoundException(`Product with ID ${id} not found`);
+  }
+
+  // 🔥 NORMALIZE IMAGES (VERY IMPORTANT)
+  const hasVariantImages = product.variants.some(
+    (v) => v.images && v.images.length > 0,
+  );
+
+  if (!hasVariantImages && product.images.length) {
+    product.variants = product.variants.map((v) => ({
+      ...v,
+      images: product.images.map((img) => ({
+  id: 'fallback-' + img.imageUrl,
+  imageUrl: img.imageUrl,
+  variantId: v.id,
+}))
+    }));
   }
 
   return product;
@@ -258,7 +310,32 @@ async update(id: string, dto: UpdateProductDto, userId: string) {
     throw new NotFoundException('RESOURCE_NOT_FOUND');
   }
 
-  const { images, variants, ...data } = dto;
+  const { images, variants, ...data } = dto ;
+
+  // use existing product values if not provided
+const origin = data.origin ?? product.origin;
+const deliveryMin = data.deliveryMin ?? product.deliveryMin;
+const deliveryMax = data.deliveryMax ?? product.deliveryMax;
+
+if (origin === 'INTERNATIONAL') {
+  if (!deliveryMin || !deliveryMax) {
+    throw new BadRequestException(
+      'INTERNATIONAL products must include deliveryMin and deliveryMax',
+    );
+  }
+
+  if (deliveryMin > deliveryMax) {
+    throw new BadRequestException(
+      'deliveryMin cannot be greater than deliveryMax',
+    );
+  }
+}
+
+// enforce LOCAL defaults
+if (origin === 'LOCAL') {
+  data.deliveryMin = 1;
+  data.deliveryMax = 3;
+}
 
   return this.prisma.$transaction(async (tx) => {
     // ✅ 1. Update base product
