@@ -88,32 +88,44 @@ BullModule.forRootAsync({
   },
 }),
     // ⚡ 4. CACHE MANAGER (Stability Refactor)
-    CacheModule.registerAsync({
-      isGlobal: true,
-      inject: [ConfigService],
-      useFactory: async (config: ConfigService) => {
-        const store = await redisStore({
-          url: config.get<string>('REDIS_URL'),
-          ttl: 600000,
-          // 🛡️ Handle potential connection drops
-          socket: {
-            reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
-          }
-        });
+CacheModule.registerAsync({
+  isGlobal: true,
+  inject: [ConfigService],
+  useFactory: async (config: ConfigService) => {
+    const store = await redisStore({
+      url: config.get<string>('REDIS_URL'),
+      ttl: 600000,
+      socket: {
+        // 🟢 1. Give the connection 30 seconds to wake up (Crucial for Cloud/ISP lags)
+        connectTimeout: 30000, 
+        
+        // 🟢 2. Keep the connection alive
+        keepAlive: 5000,
 
-        const client = store.client;
+        // 🟢 3. Force TLS if your URL starts with 'rediss://'
+        tls: config.get<string>('REDIS_URL')?.startsWith('rediss://'),
 
-        client.on('error', (err) =>
-          console.error('🔴 Redis Error Logic:', err.message),
-        );
+        reconnectStrategy: (retries) => {
+          // 🟢 4. More aggressive retry for the first few attempts
+          if (retries > 20) return new Error('REDIS_TERMINAL_FAILURE');
+          return Math.min(retries * 200, 5000);
+        },
+      }
+    });
 
-        client.on('ready', () =>
-          console.log('🟢 Redis Node Synchronized'),
-        );
+    const client = store.client;
 
-        return { store: store as any };
-      },
-    }),
+    client.on('error', (err) =>
+      console.error('🔴 Redis Connection Logic:', err.message),
+    );
+
+    client.on('ready', () =>
+      console.log('🟢 Redis Node Synchronized'),
+    );
+
+    return { store: store as any };
+  },
+}),
     
     // 5. DOMAIN FEATURE MODULES
     AuthModule,

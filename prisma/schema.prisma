@@ -1,10 +1,13 @@
 generator client {
   provider = "prisma-client-js"
+   engineType = "binary"
 }
 
 datasource db {
   provider = "postgresql"
+
 }
+
 
 enum Role {
   ADMIN
@@ -337,9 +340,9 @@ model Product {
   isDeleted        Boolean           @default(false)
   vendor           Vendor            @relation(fields: [vendorId], references: [id])
   vendorId         String
-  origin           ProductOrigin
-  deliveryMin      Int
-  deliveryMax      Int
+  origin           String            @default("LOCAL")
+  deliveryMin      Int               @default(1)
+  deliveryMax      Int               @default(3)
   storeId          String?
   cartItems        CartItem[]
   category         Category          @relation(fields: [categoryId], references: [id])
