@@ -9,21 +9,25 @@ export class FirewallMiddleware implements NestMiddleware {
   constructor(private readonly prisma: PrismaService) {}
 
   async use(req: Request, res: Response, next: NextFunction) {
-    // 1. Extract IP Address
-    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '';
-    
-    this.logger.debug(`🔍 Analyzing request from IP: [${clientIp}]`);
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+
+    // 1. If DB isn't ready yet, log it and let the request through.
+    // This prevents the "Internal Server Error" during Neon's cold start.
+    if (!this.prisma.isReady) {
+      this.logger.warn(`⚠️ SYSTEM_WARMUP: Bypassing firewall for IP [${clientIp}] while DB connects.`);
+      return next();
+    }
 
     try {
-      // 2. Database Check
-      const isBlocked = await this.prisma.blockedIp.findUnique({
-        where: { ip: clientIp },
-      });
+      // 2. Perform the IP check with a strict timeout so the UI doesn't hang
+      const isBlocked = await Promise.race([
+        this.prisma.blockedIp.findUnique({ where: { ip: clientIp } }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Query Timeout')), 4000))
+      ]) as any;
 
-      // 3. If the user is explicitly blocked, we STOP them
+      // 3. Block logic
       if (isBlocked) {
         this.logger.warn(`🚨 SECURITY_ALERT: Blocked IP ${clientIp} attempted access.`);
-        
         throw new ForbiddenException({
           error: 'ACCESS_DENIED',
           message: 'Your IP address has been blacklisted by Aviorè Security.',
@@ -32,22 +36,15 @@ export class FirewallMiddleware implements NestMiddleware {
         });
       }
 
-      this.logger.log(`✅ IP [${clientIp}] cleared.`);
+      this.logger.debug(`✅ IP [${clientIp}] cleared.`);
     } catch (error: any) {
-      // 4. Distinction Logic:
-      // If the error was a ForbiddenException (the user IS blocked), re-throw it.
-      if (error instanceof ForbiddenException) {
-        throw error;
-      }
+      // If it's a real ForbiddenException, re-throw it
+      if (error instanceof ForbiddenException) throw error;
 
-      // If the error was a Database failure (P1001, P1000, etc.), log and bypass.
-      this.logger.error(`⚠️ DATABASE_LAG: Firewall check bypassed during DB warm-up.`, {
-        code: error?.code,
-        message: error?.message,
-      });
+      // Otherwise, it's a database lag/timeout. Log and allow passage.
+      this.logger.error(`⚠️ FIREWALL_LAG: DB check timed out for [${clientIp}]. Bypassing guard.`);
     }
 
-    // Move to the next middleware or controller
     next();
   }
 }
