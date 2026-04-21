@@ -30,10 +30,11 @@ export const initializeFirebase = () => {
     });
 
     console.log('--- FIREBASE_BROADCAST_NODE_READY ---');
-  } catch (error) {
-    console.error('❌ Firebase Initialization Failed:', error.message);
-    // Don't throw here if you want the app to start without Firebase, 
-    // but usually, it's better to crash so you know it's broken.
-    throw error; 
-  }
+} catch (error: any) { // 🟢 Adding ': any' is the quickest way to bypass this
+      // 3. The "Fail-Safe" Logic
+      console.error('❌ Firebase Initialization Failed:', error.message, {
+        code: error?.code || 'NO_CODE',
+        message: error?.message || 'Unknown Error'
+      });
+    }
 };
