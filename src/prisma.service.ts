@@ -11,51 +11,74 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const url = process.env.DATABASE_URL;
     
     if (!url) {
-      throw new Error('DATABASE_URL is missing from environment variables');
+      throw new Error('❌ DATABASE_URL is missing from environment variables');
     }
 
-    // 🟢 The "Patient" Pool Configuration
+    // 1. Configure the low-level Postgres Pool
     const pool = new Pool({ 
       connectionString: url,
       max: 10, 
-      // Increase timeouts for Neon "Cold Starts"
-      connectionTimeoutMillis: 10000, 
+      min: 2, // Keep 2 connections "warm" to prevent constant cold starts
+      connectionTimeoutMillis: 30000, // 30s: Gives Neon plenty of time to wake up
       idleTimeoutMillis: 30000,
-      // Force SSL for Neon/Render
       ssl: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: false, // Required for Render -> Neon/Supabase SSL
       },
     });
-    
-    const adapter = new PrismaPg(pool);
 
-    // Pass the adapter to the parent PrismaClient
+    // 2. Add Pool Event Listeners for better debugging in Render Logs
+    pool.on('connect', () => {
+      this.logger.debug('📡 New PG client connected to pool');
+    });
+
+    pool.on('error', (err) => {
+      this.logger.error('🚨 UNEXPECTED POOL ERROR:', err.message);
+    });
+
+    // 3. Initialize Prisma with the Driver Adapter
+    const adapter = new PrismaPg(pool);
     super({ adapter });
   }
 
+  /**
+   * 🚀 Lifecycle hook to establish database connection on app start
+   */
   async onModuleInit() {
-    // 🟢 Use a retry loop for production "Cold Starts"
-    let retries = 5;
-    while (retries > 0) {
+    await this.connectWithRetry();
+  }
+
+  private async connectWithRetry(retries = 6, delay = 3000) {
+    for (let i = 1; i <= retries; i++) {
       try {
         await this.$connect();
-        this.logger.log('🟢 Aviorè Database: System Online.');
-        return; // Success!
-      } catch (error) {
-        retries--;
-        this.logger.warn(`🔴 DB Warming up... Retries left: ${retries}`);
-        if (retries === 0) {
-          this.logger.error('💀 DB Connection Terminal Failure', error);
-          // Don't throw here; let the app start so you can debug the logs
+        this.logger.log('🟢 AVIORÈ_DB: System Online. Connection established.');
+        return; 
+      } catch (error: any) {
+        this.logger.warn(
+          `🔴 DB Handshake failed (Attempt ${i}/${retries}). Reason: ${error.message}`
+        );
+
+        if (i === retries) {
+          this.logger.error('💀 DB TERMINAL FAILURE: Could not connect after multiple attempts.');
+          // We don't throw here to allow Render to finish the deploy 
+          // so we can keep debugging the live logs.
+          return;
         }
-        // Wait 2 seconds before trying again
-        await new Promise(res => setTimeout(res, 2000));
+
+        // Exponential backoff: Wait progressively longer each time
+        const backoff = delay * i;
+        this.logger.log(`⏲️ Waiting ${backoff / 1000}s before next attempt...`);
+        await new Promise((res) => setTimeout(res, backoff));
       }
     }
   }
 
   async onModuleDestroy() {
-    await this.$disconnect();
-    this.logger.log('⚪ Aviorè Database: Connection closed.');
+    try {
+      await this.$disconnect();
+      this.logger.log('⚪ AVIORÈ_DB: Connection gracefully closed.');
+    } catch (err: any) {
+      this.logger.error('🔴 Error during DB disconnect:', err.message);
+    }
   }
 }
