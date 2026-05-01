@@ -24,6 +24,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
     "@nestjs/bull": "^11.0.4",
     "@nestjs/cache-manager": "^3.1.0",
     "@nestjs/common": "^11.1.17",
@@ -62,6 +63,7 @@
     "passport-jwt": "^4.0.1",
     "paystack-api": "^2.0.6",
     "pg": "^8.18.0",
+    "react-hook-form": "^7.74.0",
     "recharts": "^3.7.0",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.11.0",
@@ -69,7 +71,8 @@
     "socket.io": "^4.8.3",
     "swagger-ui-express": "^5.0.1",
     "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "winston-daily-rotate-file": "^5.0.0",
+    "zod": "^4.4.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
