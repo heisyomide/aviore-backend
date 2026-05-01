@@ -303,66 +303,89 @@ async findByVendor(userId: string, campaignId?: string) {
 async update(id: string, dto: UpdateProductDto, userId: string) {
   const product = await this.prisma.product.findFirst({
     where: { id, vendor: { userId } },
-    include: { variants: true },
+    include: {
+      variants: {
+        include: { images: true },
+      },
+      images: true,
+    },
   });
 
   if (!product) {
     throw new NotFoundException('RESOURCE_NOT_FOUND');
   }
 
-  const { images, variants, ...data } = dto ;
+  const { images, variants, ...data } = dto;
 
-  // use existing product values if not provided
-const origin = data.origin ?? product.origin;
-const deliveryMin = data.deliveryMin ?? product.deliveryMin;
-const deliveryMax = data.deliveryMax ?? product.deliveryMax;
+  /* ================= VALIDATION ================= */
 
-if (origin === 'INTERNATIONAL') {
-  if (!deliveryMin || !deliveryMax) {
-    throw new BadRequestException(
-      'INTERNATIONAL products must include deliveryMin and deliveryMax',
-    );
+  const origin = data.origin ?? product.origin;
+  const deliveryMin = data.deliveryMin ?? product.deliveryMin;
+  const deliveryMax = data.deliveryMax ?? product.deliveryMax;
+
+  if (origin === 'INTERNATIONAL') {
+    if (!deliveryMin || !deliveryMax) {
+      throw new BadRequestException(
+        'INTERNATIONAL products must include deliveryMin and deliveryMax',
+      );
+    }
+
+    if (deliveryMin > deliveryMax) {
+      throw new BadRequestException(
+        'deliveryMin cannot be greater than deliveryMax',
+      );
+    }
   }
 
-  if (deliveryMin > deliveryMax) {
-    throw new BadRequestException(
-      'deliveryMin cannot be greater than deliveryMax',
-    );
+  if (origin === 'LOCAL') {
+    data.deliveryMin = 1;
+    data.deliveryMax = 3;
   }
-}
 
-// enforce LOCAL defaults
-if (origin === 'LOCAL') {
-  data.deliveryMin = 1;
-  data.deliveryMax = 3;
-}
+  /* ================= TRANSACTION ================= */
 
   return this.prisma.$transaction(async (tx) => {
     // ✅ 1. Update base product
-    const updatedProduct = await tx.product.update({
+    await tx.product.update({
       where: { id },
-      data: {
-        ...data,
-      },
+      data,
     });
 
-    // ✅ 2. Sync product images
-    if (images) {
+    /* ================= IMAGES ================= */
+
+    if (images !== undefined) {
+      // ⚠️ Prevent accidental wipe
+      if (images.length === 0 && product.images.length > 0) {
+        throw new BadRequestException(
+          'IMAGE_GUARD: Refusing to wipe existing product images with empty payload',
+        );
+      }
+
       await tx.productImage.deleteMany({
         where: { productId: id },
       });
 
-      await tx.productImage.createMany({
-        data: images.map((url) => ({
-          imageUrl: url,
-          productId: id,
-        })),
-      });
+      if (images.length > 0) {
+        await tx.productImage.createMany({
+          data: images.map((url) => ({
+            imageUrl: url,
+            productId: id,
+          })),
+        });
+      }
     }
 
-    // ✅ 3. Sync variants (FULL REPLACE STRATEGY)
-    if (variants) {
-      // delete old variants + images
+    /* ================= VARIANTS ================= */
+
+    if (variants !== undefined) {
+      // ⚠️ HARD GUARD: prevent silent wipe
+      if (variants.length === 0 && product.variants.length > 0) {
+        throw new BadRequestException(
+          'VARIANT_GUARD: Refusing to wipe existing variants with empty payload',
+        );
+      }
+
+      // delete existing
       await tx.variantImage.deleteMany({
         where: {
           variant: { productId: id },
@@ -373,17 +396,18 @@ if (origin === 'LOCAL') {
         where: { productId: id },
       });
 
-      // recreate variants
+      // recreate safely
       for (const variant of variants) {
         const createdVariant = await tx.variant.create({
           data: {
             productId: id,
             color: variant.color,
-            sizes: variant.sizes, // assumes JSON column
+            sizes: variant.sizes,
           },
         });
 
-        if (variant.images?.length) {
+        // ✅ IMAGE SAFETY (no blank variants)
+        if (variant.images && variant.images.length > 0) {
           await tx.variantImage.createMany({
             data: variant.images.map((img) => ({
               imageUrl: img,
@@ -394,16 +418,40 @@ if (origin === 'LOCAL') {
       }
     }
 
-    // ✅ 4. Return fresh structure
-    return tx.product.findUnique({
-      where: { id },
-      include: {
-        images: true,
-        variants: {
-          include: { images: true },
-        },
-      },
-    });
+    /* ================= FINAL FETCH ================= */
+
+    const updated = await tx.product.findUnique({
+  where: { id },
+  include: {
+    images: true,
+    variants: {
+      include: { images: true },
+    },
+  },
+});
+
+if (!updated) {
+  throw new NotFoundException('UPDATED_PRODUCT_NOT_FOUND');
+}
+
+/* ================= NORMALIZATION ================= */
+
+const hasVariantImages = updated.variants.some(
+  (v) => v.images && v.images.length > 0,
+);
+
+if (!hasVariantImages && updated.images.length) {
+  updated.variants = updated.variants.map((v) => ({
+    ...v,
+    images: updated.images.map((img) => ({
+      id: 'fallback-' + img.imageUrl,
+      imageUrl: img.imageUrl,
+      variantId: v.id,
+    })),
+  }));
+}
+
+return updated;
   });
 }
   /**
