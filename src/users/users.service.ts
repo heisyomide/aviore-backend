@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException,
 import { PrismaService } from '../prisma.service';
 import * as bcrypt from 'bcrypt';
 import { CreateAddressDto } from './dto/create-address.dto';
+import { refreshToken } from 'firebase-admin/app';
 
 @Injectable()
 export class UsersService {
@@ -460,7 +461,8 @@ async getSessions(userId: string) {
   });
 }
 
-async recordSession(userId: string, device: string, ipAddress: string) {
+async recordSession(userId: string, device: string, ipAddress: string, refreshToken: string) {
+  const hashedToken = await bcrypt.hash(refreshToken,10);
   // Set all previous sessions to isCurrent: false for this user
   await this.prisma.session.updateMany({
     where: { userId, isCurrent: true },
@@ -474,6 +476,7 @@ async recordSession(userId: string, device: string, ipAddress: string) {
       device,
       ipAddress,
       isCurrent: true,
+      refreshToken: hashedToken,
     },
   });
 }

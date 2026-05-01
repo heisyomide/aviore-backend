@@ -327,7 +327,11 @@ async hideReview(@Param('id') id: string, @Req() req: any) {
   // ANALYTICS
   // =========================================================
 @Get('analytics')
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+@UsePipes(new ValidationPipe({
+  transform: true,
+  whitelist: true,
+  forbidNonWhitelisted: true,
+}))
 async getAnalytics(@Query() query: GetAnalyticsDto) {
   const { range = '7d' } = query;
 

@@ -5,9 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-
 }
-
 
 enum Role {
   ADMIN
@@ -65,9 +63,11 @@ model VendorFollower {
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String @id @default(uuid())
+  userId       String
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String
+
   device    String // e.g., "iPhone 15, Chrome on Windows"
   ipAddress String
   lastUsed  DateTime @default(now())

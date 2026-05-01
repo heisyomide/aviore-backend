@@ -8,6 +8,7 @@ import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 import { initializeFirebase } from './config/firebase.config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import  cookieParser from 'cookie-parser';
 
 async function bootstrap() {
   const loggerInstance = WinstonModule.createLogger({
@@ -35,6 +36,8 @@ async function bootstrap() {
   app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
   }));
+
+  app.use(cookieParser ());
 
   const rawOrigins = process.env.FRONTEND_URL || '';
   const origins = [

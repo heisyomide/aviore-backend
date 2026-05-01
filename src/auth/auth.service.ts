@@ -26,7 +26,7 @@ async register(registerDto: RegisterDto) {
     throw new ConflictException('An account with this email already exists');
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedPassword = await bcrypt.hash(password, 12);
 
   try {
     // 2. STRICTURED TRANSACTION
@@ -80,8 +80,8 @@ async register(registerDto: RegisterDto) {
 
 async login(loginDto: LoginDto, req: any) {
   const { email, password } = loginDto;
-  
-  // 1. EXTRACT METADATA IMMEDIATELY
+
+  // 1. METADATA
   const ip = this.extractClientIp(req);
   const userAgent = req.headers?.['user-agent'] || 'Unknown Device';
 
@@ -99,44 +99,75 @@ async login(loginDto: LoginDto, req: any) {
   const isPasswordValid = user && (await bcrypt.compare(password, user.password));
 
   if (!user || !isPasswordValid) {
-    // Fire and forget the failed log so it doesn't slow down the error response
     this.prisma.loginLog.create({
       data: { email, ip, userAgent, status: 'FAILED' },
-    }).catch(() => {}); 
+    }).catch(() => {});
 
     throw new UnauthorizedException('INVALID_CREDENTIALS');
   }
 
-  // 4. BACKGROUND TASKS (Fire and Forget)
-  // We remove 'await' from Promise.all to prevent blocking the HTTP response.
-  // This is the "Grandmaster" move for speed.
+  // ✅ 4. GENERATE SESSION ID FIRST
+  const sessionId = crypto.randomUUID();
+
+  // ✅ 5. TOKEN PAYLOAD
+  const payload = {
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+    sessionId, // VERY IMPORTANT
+  };
+
+  // ✅ 6. GENERATE TOKENS
+  const accessToken = await this.jwtService.signAsync(payload, {
+    expiresIn: '15m',
+  });
+
+  const refreshToken = await this.jwtService.signAsync(payload, {
+    expiresIn: '7d',
+  });
+
+  const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+
+  // ✅ 7. BACKGROUND TASKS (NON-BLOCKING)
   Promise.all([
+    // login log
     this.prisma.loginLog.create({
       data: { email, ip, userAgent, status: 'SUCCESS' },
     }),
-    this.usersService.recordSession(user.id, userAgent, ip),
+
+    // 🔥 IMPORTANT: reset previous current session
+    this.prisma.session.updateMany({
+      where: { userId: user.id, isCurrent: true },
+      data: { isCurrent: false },
+    }),
+
+    // ✅ CREATE NEW SESSION
+    this.prisma.session.create({
+      data: {
+        id: sessionId, // 🔥 LINK TO JWT
+        userId: user.id,
+        device: userAgent,
+        ipAddress: ip,
+        lastUsed: new Date(),
+        refreshToken: hashedRefreshToken,
+        isCurrent: true,
+      },
+    }),
+
+    // email alert
     this.mailService.sendLoginAlert(user.email, {
       ip,
       device: userAgent,
       name: user.firstName || 'User',
     }),
   ]).catch((err) => {
-    // Log background errors without affecting the user's login experience
-    console.error('🔴 Post-Login Background Task Failed:', err.message);
+    console.error('🔴 Background Task Error:', err.message);
   });
 
-  // 5. SIGN TOKEN & RETURN
-  const payload = {
-    sub: user.id,
-    email: user.email,
-    role: user.role,
-    vendorId: user.vendor?.id || null,
-  };
-
-  const accessToken = await this.jwtService.signAsync(payload);
-
+  // ✅ 8. RETURN RESPONSE
   return {
     access_token: accessToken,
+    refresh_token: refreshToken,
     user: {
       id: user.id,
       email: user.email,
@@ -149,30 +180,81 @@ async login(loginDto: LoginDto, req: any) {
     },
   };
 }
-private extractClientIp(
-  req: any,
-): string {
-  const forwardedFor =
-    req.headers?.[
-      'x-forwarded-for'
-    ];
+private extractClientIp(req: any): string {
+  const forwardedFor = req.headers?.['x-forwarded-for'];
 
-  if (
-    typeof forwardedFor ===
-    'string'
-  ) {
-    return forwardedFor
-      .split(',')[0]
-      .trim();
+  if (typeof forwardedFor === 'string') {
+    return forwardedFor.split(',')[0].trim();
   }
 
   return (
     req.ip ||
-    req.connection
-      ?.remoteAddress ||
+    req.connection?.remoteAddress ||
     req.raw?.ip ||
     '0.0.0.0'
   );
 }
-  
+
+async refresh(sessionId: string, refreshToken: string) {
+  const session = await this.prisma.session.findUnique({
+    where: { id: sessionId },
+  });
+
+  if (!session) {
+    throw new UnauthorizedException('Session not found');
+  }
+
+  const isMatch = await bcrypt.compare(refreshToken, session.refreshToken);
+
+  if (!isMatch) {
+    throw new UnauthorizedException('Invalid refresh token');
+  }
+
+  const user = await this.prisma.user.findUnique({
+    where: { id: session.userId },
+  });
+
+  if (!user) {
+    throw new UnauthorizedException();
+  }
+
+  const payload = {
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+    sessionId: session.id,
+  };
+
+  // rotate token (VERY IMPORTANT)
+  const newRefreshToken = await this.jwtService.signAsync(payload, {
+    expiresIn: '7d',
+  });
+
+  const hashed = await bcrypt.hash(newRefreshToken, 10);
+
+  await this.prisma.session.update({
+    where: { id: session.id },
+    data: {
+      refreshToken: hashed,
+      lastUsed: new Date(),
+    },
+  });
+
+  const newAccessToken = await this.jwtService.signAsync(payload, {
+    expiresIn: '15m',
+  });
+
+  return {
+    access_token: newAccessToken,
+    refresh_token: newRefreshToken,
+  };
+}
+
+async logout(sessionId: string) {
+  await this.prisma.session.delete({
+    where: { id: sessionId },
+  });
+
+  return { message: 'Logged out successfully' };
+}
 }
