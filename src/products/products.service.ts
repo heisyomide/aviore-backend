@@ -15,10 +15,10 @@ export class ProductsService {
 
 async create(dto: CreateProductDto, userId: string) {
   const vendor = await this.getVendor(userId);
-  const { images, variants, ...rest } = dto;
+  
+  // 1. Destructure 'price' and 'stock' so they aren't in 'rest'
+  const { images, variants, price, stock, ...rest } = dto;
 
-  // 1. Guard Clause: Ensures 'variants' is defined and not empty
-  // This "narrows" the type so TS knows it's safe to use below
   if (!variants || variants.length === 0) {
     throw new BadRequestException('Product must have at least one variant');
   }
@@ -29,19 +29,22 @@ async create(dto: CreateProductDto, userId: string) {
     data: {
       ...rest,
       ...deliveryData,
+      // 2. Explicitly map to the new Schema names
+      price: price, 
+      stock: stock,
       vendorId: vendor.id,
-
-      // Handle Main Images
+      
       images: {
         create: images?.map((url) => ({ imageUrl: url })) || [],
       },
-
-      // Handle Variants (TS now knows 'variants' is NOT undefined)
+      
       variants: {
         create: variants.map((v) => ({
           color: v.color,
-          // Handle both singular 'size' or array 'sizes' for flexibility
-          sizes: v.sizes ?? (v.size ? [v.size] : []), 
+          // If your new schema uses 'size' (singular), map it here
+          size: v.size || (v.sizes?.[0] ?? null), 
+          price: v.price || price, // Fallback to base price
+          stock: v.stock || 0,
           images: {
             create: v.images?.map((url) => ({ imageUrl: url })) || [],
           },
@@ -51,6 +54,7 @@ async create(dto: CreateProductDto, userId: string) {
     include: this.defaultIncludes,
   });
 }
+
 
   /**
    * GLOBAL_CATALOG_QUERY (The Shop Engine)
@@ -212,18 +216,20 @@ async findOne(id: string) {
     (v) => v.images && v.images.length > 0,
   );
 
-  if (!hasVariantImages && product.images.length) {
-    product.variants = product.variants.map((v) => ({
-      ...v,
-      images: product.images.map((img) => ({
-  id: 'fallback-' + img.imageUrl,
-  imageUrl: img.imageUrl,
-  variantId: v.id,
-}))
-    }));
-  }
+if (!hasVariantImages && product.images.length > 0) {
+  product.variants = product.variants.map((v: any) => ({
+    ...v,
+    images: product.images.map((img: any) => ({
+      // 🔥 Ensure ID is unique and productVariantId matches schema
+      id: `fallback-${img.id}`, 
+      imageUrl: img.imageUrl,
+      productVariantId: v.id, // ✅ Renamed from variantId
+    })),
+  }));
+}
 
-  return product;
+return product;
+
 }
 
   /**
@@ -305,12 +311,12 @@ if (variants && variants.length > 0) {
     const incomingIds = incomingVariants.map((v) => v.id).filter(Boolean);
 
     // Remove variants deleted in UI
-    await tx.variant.deleteMany({
+    await tx.productVariant.deleteMany({
       where: { productId, id: { notIn: incomingIds } },
     });
 
     for (const v of incomingVariants) {
-      const variant = await tx.variant.upsert({
+      const variant = await tx.productVariant.upsert({
         where: { id: v.id || 'new-id' },
         create: {
           productId,
@@ -325,9 +331,9 @@ if (variants && variants.length > 0) {
 
       // Sync Variant Images
       if (v.images !== undefined) {
-        await tx.variantImage.deleteMany({ where: { variantId: variant.id } });
+        await tx.variantImage.deleteMany({ where: { productVariantId: variant.id } });
         await tx.variantImage.createMany({
-          data: v.images.map((url) => ({ imageUrl: url, variantId: variant.id })),
+          data: v.images.map((url) => ({ imageUrl: url,   productVariantId: variant.id })),
         });
       }
     }
@@ -369,14 +375,25 @@ if (variants && variants.length > 0) {
     };
   }
 
-  private normalizeImages(product: any) {
-    if (!product) return null;
-    product.variants = product.variants.map((v: any) => ({
-      ...v,
-      images: v.images.length > 0 ? v.images : product.images,
-    }));
-    return product;
-  }
+private normalizeImages(product: any) {
+  if (!product) return null;
+  
+  product.variants = product.variants.map((v: any) => ({
+    ...v,
+    images: v.images.length > 0 
+      ? v.images.map((img: any) => ({
+          ...img,
+          productVariantId: v.id // 🔥 Fix: renamed from variantId
+        }))
+      : product.images.map((img: any) => ({
+          id: `fallback-${img.id}`,
+          imageUrl: img.imageUrl,
+          productVariantId: v.id, // 🔥 Fix: renamed from variantId
+        })),
+  }));
+  
+  return product;
+}
 
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
@@ -477,15 +494,19 @@ async addVariant(productId: string, dto: CreateVariantDto, userId: string) {
     throw new NotFoundException('Product not found or unauthorized');
   }
 
-  return this.prisma.variant.create({
+return this.prisma.productVariant.create({
     data: {
       productId,
       color: dto.color,
-      sizes: dto.sizes,
+      
+      // 🔥 FIX: Ensure we only send a String, not an Array
+      size: dto.size || (dto.sizes && dto.sizes.length > 0 ? dto.sizes[0] : null), 
+      
+      price: dto.price,
+      stock: dto.stock ?? 0,
 
       images: {
-        create: dto
-        .images.map((url) => ({
+        create: dto.images.map((url) => ({
           imageUrl: url,
         })),
       },
@@ -497,12 +518,12 @@ async addVariant(productId: string, dto: CreateVariantDto, userId: string) {
 }
 
 async updateVariant(
-  variantId: string,
+  productVariantId: string,
   dto: UpdateVariantDto,
   userId: string,
 ) {
-  const variant = await this.prisma.variant.findUnique({
-    where: { id: variantId },
+  const variant = await this.prisma.productVariant.findUnique({
+    where: { id: productVariantId },
     include: {
       product: {
         include: { vendor: true },
@@ -516,8 +537,8 @@ async updateVariant(
 
   const { images, ...data } = dto;
 
-  return this.prisma.variant.update({
-    where: { id: variantId },
+  return this.prisma.productVariant.update({
+    where: { id: productVariantId },
     data: {
       ...data,
 
@@ -537,7 +558,7 @@ async updateVariant(
 }
 
 async deleteVariant(variantId: string, userId: string) {
-  const variant = await this.prisma.variant.findUnique({
+  const variant = await this.prisma.productVariant.findUnique({
     where: { id: variantId },
     include: {
       product: {
@@ -550,7 +571,7 @@ async deleteVariant(variantId: string, userId: string) {
     throw new ForbiddenException('Unauthorized');
   }
 
-  return this.prisma.variant.delete({
+  return this.prisma.productVariant.delete({
     where: { id: variantId },
   });
 }

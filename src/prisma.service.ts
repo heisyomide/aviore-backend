@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
   private isDbReady = false;
+ 
 
   constructor() {
     const url = process.env.DATABASE_URL;

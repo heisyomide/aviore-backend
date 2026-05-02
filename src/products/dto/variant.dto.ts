@@ -4,6 +4,10 @@ import {
   IsNotEmpty,
   IsOptional,
   IsUUID,
+  IsInt,
+  IsPositive,
+  IsNumber,
+  Min,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -28,7 +32,19 @@ export class CreateVariantDto {
   @IsArray()
   @IsString({ each: true })
   sizes?: string[];
+
+   @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  price?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  stock?: number;
+
 }
+
 
 export class UpdateVariantDto extends CreateVariantDto {
   @ApiProperty({ example: 'uuid-123', required: false })
