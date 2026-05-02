@@ -243,11 +243,9 @@ async findByVendor(userId: string, campaignId?: string) {
       vendor: { userId },
       isDeleted: false,
       
-      // DEEP_LINK_FILTER_PROTOCOL
-      // If a campaignId is passed, we filter the results to only show 
-      // products that exist in the CampaignProduct join table for that event.
+      // 🔥 Match your schema naming: campaignProducts
       ...(campaignId && {
-        CampaignProduct: {
+        campaignProducts: {
           some: { campaignId: campaignId }
         }
       }),
@@ -255,15 +253,18 @@ async findByVendor(userId: string, campaignId?: string) {
     include: { 
       category: true,
       images: true,
-      // We include the campaign link so the UI can show the discount badge
+      variants: { include: { images: true } },
+      // 🔥 Match your schema naming: campaignProducts
       campaignProducts: {
-        where: { campaignId: campaignId },
+        where: campaignId ? { campaignId } : undefined,
         include: { campaign: true }
       }
     },
     orderBy: { createdAt: 'desc' }
   });
 }
+
+
   /**
    * UPDATE_PRODUCT_PROTOCOL
    */
