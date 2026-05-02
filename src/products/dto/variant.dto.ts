@@ -3,6 +3,7 @@ import {
   IsArray,
   IsNotEmpty,
   IsOptional,
+  IsUUID,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -12,43 +13,26 @@ export class CreateVariantDto {
   @IsNotEmpty()
   color!: string;
 
-  @ApiProperty({
-    example: ['black1.jpg', 'black2.jpg'],
-  })
+  @ApiProperty({ example: ['black1.jpg'] })
   @IsArray()
   @IsString({ each: true })
   images!: string[];
 
-  @ApiProperty({
-    example: ['M', 'L', 'XL'] // or ['40', '41']
-  })
-  @IsArray()
-  @IsString({ each: true })
-  sizes!: string[];
-}
-
-
-export class UpdateVariantDto {
-     @IsOptional()
-  @ApiProperty({ example: 'Black' })
+  @ApiProperty({ example: 'M', required: false })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  color?: string;
+  size?: string;
 
-  @ApiProperty({
-    example: ['black1.jpg', 'black2.jpg'],
-  })
-   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  images?: string[];
-
-  @ApiProperty({
-    example: ['M', 'L', 'XL'] // or ['40', '41']
-  })
-   @IsOptional()
+  @ApiProperty({ example: ['M', 'L'], required: false })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   sizes?: string[];
 }
 
+export class UpdateVariantDto extends CreateVariantDto {
+  @ApiProperty({ example: 'uuid-123', required: false })
+  @IsOptional()
+  @IsUUID()
+  id?: string; // 🔥 CRITICAL: Required for stable upserts in the Service
+}

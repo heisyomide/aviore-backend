@@ -12,85 +12,46 @@ export class ProductsService {
   /**
    * CREATE_PRODUCT_PROTOCOL
    */
+
 async create(dto: CreateProductDto, userId: string) {
-  const vendor = await this.prisma.vendor.findUnique({
-    where: { userId },
-  });
+  const vendor = await this.getVendor(userId);
+  const { images, variants, ...rest } = dto;
 
-  if (!vendor) {
-    throw new UnauthorizedException(
-      'VENDOR_REGISTRATION_INCOMPLETE: Cannot list items.',
-    );
+  // 1. Guard Clause: Ensures 'variants' is defined and not empty
+  // This "narrows" the type so TS knows it's safe to use below
+  if (!variants || variants.length === 0) {
+    throw new BadRequestException('Product must have at least one variant');
   }
 
-  const { images, variants, ...data } = dto ;
-
-
-  // ✅ ORIGIN + DELIVERY VALIDATION
-if (data.origin === 'INTERNATIONAL') {
-  if (!data.deliveryMin || !data.deliveryMax) {
-    throw new BadRequestException(
-      'INTERNATIONAL products must include deliveryMin and deliveryMax',
-    );
-  }
-
-  if (data.deliveryMin > data.deliveryMax) {
-    throw new BadRequestException(
-      'deliveryMin cannot be greater than deliveryMax',
-    );
-  }
-}
-
-// ✅ AUTO FIX FOR LOCAL
-if (data.origin === 'LOCAL') {
-  data.deliveryMin = 1;
-  data.deliveryMax = 3;
-}
-
-  // 🚨 RULE: Must have either images or variants
-if (!variants?.length) {
-  throw new BadRequestException('Product must have variants');
-}
+  const deliveryData = this.validateAndFormatLogistics(rest);
 
   return this.prisma.product.create({
     data: {
-      ...data,
+      ...rest,
+      ...deliveryData,
       vendorId: vendor.id,
 
-      // ✅ Default Images (for non-variant products)
-images: { create: []},
+      // Handle Main Images
+      images: {
+        create: images?.map((url) => ({ imageUrl: url })) || [],
+      },
 
-      // 🔥 VARIANTS SUPPORT
-      variants: variants
-        ? {
-            create: variants.map((variant) => ({
-              color: variant.color,
-              sizes: variant.sizes, // assuming JSON column
-
-              images: {
-                create: variant.images.map((url) => ({
-                  imageUrl: url,
-                })),
-              },
-            })),
-          }
-        : undefined,
-    },
-
-    include: {
-      category: { select: { name: true } },
-      images: true,
-      vendor: { select: { storeName: true } },
-
-      // 🔥 include variants
+      // Handle Variants (TS now knows 'variants' is NOT undefined)
       variants: {
-        include: {
-          images: true,
-        },
+        create: variants.map((v) => ({
+          color: v.color,
+          // Handle both singular 'size' or array 'sizes' for flexibility
+          sizes: v.sizes ?? (v.size ? [v.size] : []), 
+          images: {
+            create: v.images?.map((url) => ({ imageUrl: url })) || [],
+          },
+        })),
       },
     },
+    include: this.defaultIncludes,
   });
 }
+
   /**
    * GLOBAL_CATALOG_QUERY (The Shop Engine)
    * Fixed: Added 'sort' to the parameters type definition.
@@ -300,160 +261,123 @@ async findByVendor(userId: string, campaignId?: string) {
   /**
    * UPDATE_PRODUCT_PROTOCOL
    */
-async update(id: string, dto: UpdateProductDto, userId: string) {
-  const product = await this.prisma.product.findFirst({
-    where: { id, vendor: { userId } },
-    include: {
-      variants: {
-        include: { images: true },
-      },
-      images: true,
-    },
-  });
+  async update(id: string, dto: UpdateProductDto, userId: string) {
+    const existing = await this.findProductOrThrow(id, userId);
+    const { images, variants, ...rest } = dto;
 
-  if (!product) {
-    throw new NotFoundException('RESOURCE_NOT_FOUND');
-  }
+    const deliveryData = this.validateAndFormatLogistics({ ...existing, ...rest });
 
-  const { images, variants, ...data } = dto;
-
-  /* ================= VALIDATION ================= */
-
-  const origin = data.origin ?? product.origin;
-  const deliveryMin = data.deliveryMin ?? product.deliveryMin;
-  const deliveryMax = data.deliveryMax ?? product.deliveryMax;
-
-  if (origin === 'INTERNATIONAL') {
-    if (!deliveryMin || !deliveryMax) {
-      throw new BadRequestException(
-        'INTERNATIONAL products must include deliveryMin and deliveryMax',
-      );
-    }
-
-    if (deliveryMin > deliveryMax) {
-      throw new BadRequestException(
-        'deliveryMin cannot be greater than deliveryMax',
-      );
-    }
-  }
-
-  if (origin === 'LOCAL') {
-    data.deliveryMin = 1;
-    data.deliveryMax = 3;
-  }
-
-  /* ================= TRANSACTION ================= */
-
-  return this.prisma.$transaction(async (tx) => {
-    // ✅ 1. Update base product
-    await tx.product.update({
-      where: { id },
-      data,
-    });
-
-    /* ================= IMAGES ================= */
-
-    if (images !== undefined) {
-      // ⚠️ Prevent accidental wipe
-      if (images.length === 0 && product.images.length > 0) {
-        throw new BadRequestException(
-          'IMAGE_GUARD: Refusing to wipe existing product images with empty payload',
-        );
-      }
-
-      await tx.productImage.deleteMany({
-        where: { productId: id },
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Update Core Product
+      await tx.product.update({
+        where: { id },
+        data: { ...rest, ...deliveryData },
       });
 
-      if (images.length > 0) {
+      // 2. Sync Global Images (Clear & Replace)
+      if (images !== undefined) {
+        await tx.productImage.deleteMany({ where: { productId: id } });
         await tx.productImage.createMany({
-          data: images.map((url) => ({
-            imageUrl: url,
-            productId: id,
-          })),
+          data: images.map((url) => ({ imageUrl: url, productId: id })),
         });
       }
-    }
 
-    /* ================= VARIANTS ================= */
+      // 3. The Matrix Engine (Upsert Logic)
+// Inside your update method
+if (variants && variants.length > 0) {
+  // TypeScript is happy here too!
+  await this.syncVariants(tx, id, variants);
+}
 
-    if (variants !== undefined) {
-      // ⚠️ HARD GUARD: prevent silent wipe
-      if (variants.length === 0 && product.variants.length > 0) {
-        throw new BadRequestException(
-          'VARIANT_GUARD: Refusing to wipe existing variants with empty payload',
-        );
-      }
 
-      // delete existing
-      await tx.variantImage.deleteMany({
-        where: {
-          variant: { productId: id },
+      const updated = await tx.product.findUnique({
+        where: { id },
+        include: this.defaultIncludes,
+      });
+
+      return this.normalizeImages(updated);
+    });
+  }
+
+  // --- PRIVATE HELPERS ---
+
+  private async syncVariants(tx: any, productId: string, incomingVariants: any[]) {
+    const incomingIds = incomingVariants.map((v) => v.id).filter(Boolean);
+
+    // Remove variants deleted in UI
+    await tx.variant.deleteMany({
+      where: { productId, id: { notIn: incomingIds } },
+    });
+
+    for (const v of incomingVariants) {
+      const variant = await tx.variant.upsert({
+        where: { id: v.id || 'new-id' },
+        create: {
+          productId,
+          color: v.color,
+          sizes: v.sizes,
+        },
+        update: {
+          color: v.color,
+          sizes: v.sizes,
         },
       });
 
-      await tx.variant.deleteMany({
-        where: { productId: id },
-      });
-
-      // recreate safely
-      for (const variant of variants) {
-        const createdVariant = await tx.variant.create({
-          data: {
-            productId: id,
-            color: variant.color,
-            sizes: variant.sizes,
-          },
+      // Sync Variant Images
+      if (v.images !== undefined) {
+        await tx.variantImage.deleteMany({ where: { variantId: variant.id } });
+        await tx.variantImage.createMany({
+          data: v.images.map((url) => ({ imageUrl: url, variantId: variant.id })),
         });
-
-        // ✅ IMAGE SAFETY (no blank variants)
-        if (variant.images && variant.images.length > 0) {
-          await tx.variantImage.createMany({
-            data: variant.images.map((img) => ({
-              imageUrl: img,
-              variantId: createdVariant.id,
-            })),
-          });
-        }
       }
     }
+  }
 
-    /* ================= FINAL FETCH ================= */
+  private validateAndFormatLogistics(data: any) {
+    if (data.origin === 'INTERNATIONAL') {
+      if (!data.deliveryMin || !data.deliveryMax) {
+        throw new BadRequestException('INTERNATIONAL products require delivery range');
+      }
+      if (data.deliveryMin > data.deliveryMax) {
+        throw new BadRequestException('Min delivery cannot exceed Max');
+      }
+      return { deliveryMin: data.deliveryMin, deliveryMax: data.deliveryMax, origin: 'INTERNATIONAL' };
+    }
+    return { deliveryMin: 1, deliveryMax: 3, origin: 'LOCAL' };
+  }
 
-    const updated = await tx.product.findUnique({
-  where: { id },
-  include: {
-    images: true,
-    variants: {
-      include: { images: true },
-    },
-  },
-});
+  private async getVendor(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({ where: { userId } });
+    if (!vendor) throw new UnauthorizedException('VENDOR_REGISTRATION_INCOMPLETE');
+    return vendor;
+  }
 
-if (!updated) {
-  throw new NotFoundException('UPDATED_PRODUCT_NOT_FOUND');
-}
+  private async findProductOrThrow(id: string, userId: string) {
+    const product = await this.prisma.product.findFirst({
+      where: { id, vendor: { userId } },
+    });
+    if (!product) throw new NotFoundException('PRODUCT_NOT_FOUND');
+    return product;
+  }
 
-/* ================= NORMALIZATION ================= */
+  private get defaultIncludes() {
+    return {
+      category: { select: { name: true } },
+      images: true,
+      vendor: { select: { storeName: true } },
+      variants: { include: { images: true } },
+    };
+  }
 
-const hasVariantImages = updated.variants.some(
-  (v) => v.images && v.images.length > 0,
-);
+  private normalizeImages(product: any) {
+    if (!product) return null;
+    product.variants = product.variants.map((v: any) => ({
+      ...v,
+      images: v.images.length > 0 ? v.images : product.images,
+    }));
+    return product;
+  }
 
-if (!hasVariantImages && updated.images.length) {
-  updated.variants = updated.variants.map((v) => ({
-    ...v,
-    images: updated.images.map((img) => ({
-      id: 'fallback-' + img.imageUrl,
-      imageUrl: img.imageUrl,
-      variantId: v.id,
-    })),
-  }));
-}
-
-return updated;
-  });
-}
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
    */

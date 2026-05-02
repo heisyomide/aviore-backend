@@ -22,9 +22,7 @@ export class CreateProductDto {
   @MinLength(3)
   title!: string;
 
-  @ApiProperty({
-    example: 'High-quality noise-canceling headphones.',
-  })
+  @ApiProperty({ example: 'High-quality noise-canceling headphones.' })
   @IsString()
   @IsNotEmpty()
   description!: string;
@@ -35,42 +33,36 @@ export class CreateProductDto {
   price!: number;
 
   @ApiProperty({ example: 50 })
-  @IsNumber()
+  @IsInt() // Changed to IsInt for cleaner stock management
   @Min(0)
   stock!: number;
 
-  @ApiProperty({ example: 'uuid-of-category' })
+  @ApiProperty({ example: 'category-uuid' })
   @IsString()
   @IsNotEmpty()
   categoryId!: string;
 
-
   @ApiProperty({ enum: ProductOrigin, example: 'LOCAL' })
-@IsEnum(ProductOrigin)
-origin!: ProductOrigin;
+  @IsEnum(ProductOrigin)
+  origin!: ProductOrigin;
 
-@ApiProperty({ example: 1 })
-@IsInt()
-@Min(1)
-deliveryMin!: number;
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  @Min(1)
+  deliveryMin!: number;
 
-@ApiProperty({ example: 5 })
-@IsInt()
-@Min(1)
-deliveryMax!: number;
+  @ApiProperty({ example: 5 })
+  @IsInt()
+  @Min(1)
+  deliveryMax!: number;
 
-  // 👇 keep this optional (fallback if no variants)
   @ApiProperty({ required: false, type: [String] })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   images?: string[];
 
-  // 🔥 NEW: Variants
-  @ApiProperty({
-    type: [CreateVariantDto],
-    required: false,
-  })
+  @ApiProperty({ type: [CreateVariantDto], required: false })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
