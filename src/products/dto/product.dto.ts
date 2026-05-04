@@ -30,12 +30,14 @@ export class CreateProductDto {
   @ApiProperty({ example: 99.99 })
   @IsNumber()
   @IsPositive()
-  price!: number;
+  @IsOptional()
+  price?: number;                    // Made optional - variants will drive pricing
 
   @ApiProperty({ example: 50 })
-  @IsInt() // Changed to IsInt for cleaner stock management
+  @IsInt()
   @Min(0)
-  stock!: number;
+  @IsOptional()
+  stock?: number;
 
   @ApiProperty({ example: 'category-uuid' })
   @IsString()
@@ -56,16 +58,17 @@ export class CreateProductDto {
   @Min(1)
   deliveryMax!: number;
 
+  // 🔥 GENERAL IMAGES - Main gallery shown by default (Temu style)
   @ApiProperty({ required: false, type: [String] })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  images?: string[];
+  generalImages?: string[];
 
-  @ApiProperty({ type: [CreateVariantDto], required: false })
-  @IsOptional()
+  // Variants (Required for multivendor marketplace)
+  @ApiProperty({ type: [CreateVariantDto], required: true })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateVariantDto)
-  variants?: CreateVariantDto[];
+  variants!: CreateVariantDto[];     // Made required (!)
 }

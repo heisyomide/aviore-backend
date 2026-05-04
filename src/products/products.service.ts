@@ -12,14 +12,18 @@ export class ProductsService {
   /**
    * CREATE_PRODUCT_PROTOCOL
    */
-
 async create(dto: CreateProductDto, userId: string) {
   const vendor = await this.getVendor(userId);
-  
-  // 1. Destructure 'price' and 'stock' so they aren't in 'rest'
-  const { images, variants, price, stock, ...rest } = dto;
 
-  if (!variants || variants.length === 0) {
+  const { 
+    generalImages = [], 
+    variants = [], 
+    price: basePrice = 0, 
+    stock: baseStock = 0, 
+    ...rest 
+  } = dto;
+
+  if (variants.length === 0) {
     throw new BadRequestException('Product must have at least one variant');
   }
 
@@ -29,32 +33,40 @@ async create(dto: CreateProductDto, userId: string) {
     data: {
       ...rest,
       ...deliveryData,
-      // 2. Explicitly map to the new Schema names
-      price: price, 
-      stock: stock,
       vendorId: vendor.id,
-      
+      price: basePrice,
+      stock: baseStock,
+
+      // General Images → ProductImage[]
       images: {
-        create: images?.map((url) => ({ imageUrl: url })) || [],
+        create: generalImages.map((url) => ({ imageUrl: url })),
       },
-      
+
+      // Variants
       variants: {
         create: variants.map((v) => ({
-          color: v.color,
-          // If your new schema uses 'size' (singular), map it here
-          size: v.size || (v.sizes?.[0] ?? null), 
-          price: v.price || price, // Fallback to base price
-          stock: v.stock || 0,
+          color: v.color?.trim(),
+          size: v.size?.trim() || null,
+          price: v.price ?? basePrice,
+          stock: v.stock ?? 0,
+          isActive: true,
+
+          // Variant-specific images → VariantImage[]
           images: {
-            create: v.images?.map((url) => ({ imageUrl: url })) || [],
+            create: (v.images || []).map((url) => ({ imageUrl: url })),
           },
         })),
       },
     },
-    include: this.defaultIncludes,
+    include: {
+      images: true,
+      variants: {
+        include: { images: true }
+      },
+      vendor: { select: { storeName: true } },
+    },
   });
 }
-
 
   /**
    * GLOBAL_CATALOG_QUERY (The Shop Engine)
@@ -268,43 +280,48 @@ async findByVendor(userId: string, campaignId?: string) {
   /**
    * UPDATE_PRODUCT_PROTOCOL
    */
-  async update(id: string, dto: UpdateProductDto, userId: string) {
-    const existing = await this.findProductOrThrow(id, userId);
-    const { images, variants, ...rest } = dto;
+async update(id: string, dto: UpdateProductDto, userId: string) {
+  const existing = await this.findProductOrThrow(id, userId);
 
-    const deliveryData = this.validateAndFormatLogistics({ ...existing, ...rest });
+  const { 
+    generalImages,           // general images
+    variants, 
+    ...rest 
+  } = dto;
 
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Update Core Product
-      await tx.product.update({
-        where: { id },
-        data: { ...rest, ...deliveryData },
-      });
+  const deliveryData = this.validateAndFormatLogistics({ ...existing, ...rest });
 
-      // 2. Sync Global Images (Clear & Replace)
-      if (images !== undefined) {
-        await tx.productImage.deleteMany({ where: { productId: id } });
+  return this.prisma.$transaction(async (tx) => {
+    // 1. Update Core Product Data
+    await tx.product.update({
+      where: { id },
+      data: { ...rest, ...deliveryData },
+    });
+
+    // 2. Sync General Images (if provided)
+    if (generalImages !== undefined) {
+      await tx.productImage.deleteMany({ where: { productId: id } });
+      if (generalImages.length > 0) {
         await tx.productImage.createMany({
-          data: images.map((url) => ({ imageUrl: url, productId: id })),
+          data: generalImages.map((url) => ({ imageUrl: url, productId: id })),
         });
       }
+    }
 
-      // 3. The Matrix Engine (Upsert Logic)
-// Inside your update method
-if (variants && variants.length > 0) {
-  // TypeScript is happy here too!
-  await this.syncVariants(tx, id, variants);
-}
+    // 3. Sync Variants
+    if (variants && variants.length > 0) {
+      await this.syncVariants(tx, id, variants);
+    }
 
-
-      const updated = await tx.product.findUnique({
-        where: { id },
-        include: this.defaultIncludes,
-      });
-
-      return this.normalizeImages(updated);
+    // 4. Return updated product
+    const updated = await tx.product.findUnique({
+      where: { id },
+      include: this.defaultIncludes,
     });
-  }
+
+    return this.normalizeImages(updated);
+  });
+}
 
   // --- PRIVATE HELPERS ---
 
@@ -486,7 +503,11 @@ async addReview(productId: string, userId: string, dto: { rating: number; commen
   });
 }
 
-async addVariant(productId: string, dto: CreateVariantDto, userId: string) {
+async addVariant(
+  productId: string,
+  dto: CreateVariantDto,
+  userId: string,
+) {
   const product = await this.prisma.product.findFirst({
     where: { id: productId, vendor: { userId } },
   });
@@ -495,22 +516,25 @@ async addVariant(productId: string, dto: CreateVariantDto, userId: string) {
     throw new NotFoundException('Product not found or unauthorized');
   }
 
-return this.prisma.productVariant.create({
+  return this.prisma.productVariant.create({
     data: {
       productId,
       color: dto.color,
-      
-      // 🔥 FIX: Ensure we only send a String, not an Array
-      size: dto.size || (dto.sizes && dto.sizes.length > 0 ? dto.sizes[0] : null), 
-      
+
+      // ✅ SIMPLE & SAFE
+      size: dto.size, 
+
       price: dto.price,
       stock: dto.stock ?? 0,
 
-      images: {
-        create: dto.images.map((url) => ({
-          imageUrl: url,
-        })),
-      },
+      // ✅ CORRECT: variant images, not generalImages
+      ...(dto.images?.length && {
+        images: {
+          create: dto.images.map((url) => ({
+            imageUrl: url,
+          })),
+        },
+      }),
     },
     include: {
       images: true,

@@ -362,14 +362,24 @@ async deleteCategory(id: string, adminId: string) {
   // PRODUCT MODERATION
   // =========================================================
 
-  async getPendingProducts() {
-    return this.prisma.product.findMany({
-      where: { status: 'PENDING' },
-      include: {
-        vendor: { select: { storeName: true } }
+async getPendingProducts() {
+  return this.prisma.product.findMany({
+    where: { 
+      status: ProductStatus.PENDING,
+      isDeleted: false,           // ← This was missing
+    },
+    include: {
+      vendor: { select: { storeName: true } },
+      images: true,               // general images
+      variants: {
+        include: {
+          images: true              // variant images
+        }
       }
-    });
-  }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+}
 
 // Inside your updateProductStatus method
 // Inside your updateProductStatus method
@@ -377,15 +387,42 @@ async deleteCategory(id: string, adminId: string) {
 
 async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
   return this.prisma.$transaction(async (tx) => {
-    const product = await tx.product.update({ 
-      where: { id }, 
-      data: { status } 
+    // First, fetch the product to do proper validation
+    const existingProduct = await tx.product.findUnique({
+      where: { id },
+      select: { 
+        id: true, 
+        isDeleted: true, 
+        status: true,
+        vendorId: true 
+      }
     });
 
-    let auditAction: AuditAction;
+    if (!existingProduct) {
+      throw new Error("Product not found");
+    }
 
-    // ❌ WRONG: if (status === KycStatus.ACTIVE) 
-    // ✅ RIGHT: Compare against ProductStatus
+    if (existingProduct.isDeleted) {
+      throw new Error("Cannot update status of a deleted product");
+    }
+
+    // Optional: Only allow changing PENDING products
+    if (existingProduct.status !== ProductStatus.PENDING) {
+      throw new Error(`Product is already ${existingProduct.status}`);
+    }
+
+    // Now perform the update
+    const updatedProduct = await tx.product.update({
+      where: { id },
+      data: { 
+        status,
+        // Optional: If approved, make it active automatically
+        ...(status === ProductStatus.APPROVED && { isActive: true })
+      }
+    });
+
+    // Audit Log
+    let auditAction: AuditAction;
     if (status === ProductStatus.APPROVED) {
       auditAction = AuditAction.APPROVE_PRODUCT;
     } else if (status === ProductStatus.REJECTED) {
@@ -400,11 +437,11 @@ async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
         action: auditAction,
         targetId: id,
         targetType: 'PRODUCT',
-        details: `Product status updated to ${status}`
+        details: `Product status updated from ${existingProduct.status} to ${status}`,
       }
     });
 
-    return product;
+    return updatedProduct;
   });
 }
 
