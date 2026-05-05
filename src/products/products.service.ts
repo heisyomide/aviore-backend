@@ -82,33 +82,23 @@ async findAll(params: {
   const { search, categoryId, page = 1, limit = 10, sort } = params;
   const skip = (page - 1) * limit;
 
-  // 1. SORTING
   let orderBy: Prisma.ProductOrderByWithRelationInput = { createdAt: 'desc' };
   if (sort === 'price_asc') orderBy = { price: 'asc' };
   if (sort === 'price_desc') orderBy = { price: 'desc' };
 
-  // 2. CATEGORY FILTER
-  let categoryFilter: Prisma.ProductWhereInput = {};
-
-  if (categoryId) {
-    categoryFilter = {
-      category: {
-        OR: [
-          { id: categoryId },
-          { slug: categoryId },
-          { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } },
-          { parent: { parent: { OR: [{ id: categoryId }, { slug: categoryId }] } } },
-        ],
-      },
-    };
-  }
-
-  // 3. WHERE
   const where: Prisma.ProductWhereInput = {
     isDeleted: false,
     isActive: true,
     status: 'APPROVED',
-    ...categoryFilter,
+    ...(categoryId && {
+      category: {
+        OR: [
+          { id: categoryId },
+          { slug: categoryId },
+          { parent: { id: categoryId } },
+        ],
+      },
+    }),
     ...(search && {
       OR: [
         { title: { contains: search, mode: 'insensitive' } },
@@ -117,20 +107,11 @@ async findAll(params: {
     }),
   };
 
-  // 4. FETCH
-  const [rawData, total] = await Promise.all([
+  const [products, total] = await Promise.all([
     this.prisma.product.findMany({
       where,
       include: {
-        category: {
-          include: {
-            parent: {
-              include: { parent: true },
-            },
-          },
-        },
-        images: { select: { imageUrl: true } },
-        vendor: { select: { storeName: true } },
+        images: true,
         variants: {
           include: {
             images: true,
@@ -144,34 +125,31 @@ async findAll(params: {
     this.prisma.product.count({ where }),
   ]);
 
-  // 🔥 5. NORMALIZE IMAGES (CRITICAL FIX)
-  const data = rawData.map((product) => {
-    const hasVariantImages = product.variants.some(
-      (v) => v.images && v.images.length > 0,
-    );
+  const data = products.map((p) => {
+    const variantPrices = p.variants.map(v => Number(v.price) || 0).filter(Boolean);
 
-    if (!hasVariantImages && product.images.length) {
-      return {
-        ...product,
-        variants: product.variants.map((v) => ({
-          ...v,
-          images: product.images.map((img) => ({
-  id: 'fallback-' + img.imageUrl,
-  imageUrl: img.imageUrl,
-  variantId: v.id,
-}))
-        })),
-      };
-    }
+    const displayPrice =
+      variantPrices.length > 0
+        ? Math.min(...variantPrices) // 🔥 show cheapest variant
+        : Number(p.price) || 0;
 
-    return product;
+    const totalStock =
+      p.variants.length > 0
+        ? p.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0)
+        : Number(p.stock) || 0;
+
+    return {
+      ...p,
+      displayPrice,
+      totalStock,
+    };
   });
 
   return {
     data,
     meta: {
       total,
-      page: Number(page),
+      page,
       lastPage: Math.ceil(total / limit),
     },
   };
@@ -185,19 +163,13 @@ async findOne(id: string) {
   const product = await this.prisma.product.findUnique({
     where: { id },
     include: {
-      images: { select: { imageUrl: true } },
+      images: true,
       variants: {
         include: {
           images: true,
         },
       },
-      category: {
-        include: {
-          parent: {
-            include: { parent: true },
-          },
-        },
-      },
+      category: true,
       vendor: {
         include: {
           _count: {
@@ -205,43 +177,32 @@ async findOne(id: string) {
           },
         },
       },
-      reviews: {
-        include: {
-          user: {
-            select: {
-              firstName: true,
-              lastName: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      },
     },
   });
 
   if (!product || product.isDeleted) {
-    throw new NotFoundException(`Product with ID ${id} not found`);
+    throw new NotFoundException('Product not found');
   }
 
-  // 🔥 NORMALIZE IMAGES (VERY IMPORTANT)
-  const hasVariantImages = product.variants.some(
-    (v) => v.images && v.images.length > 0,
-  );
+  const variantPrices = product.variants
+    .map(v => Number(v.price) || 0)
+    .filter(Boolean);
 
-if (!hasVariantImages && product.images.length > 0) {
-  product.variants = product.variants.map((v: any) => ({
-    ...v,
-    images: product.images.map((img: any) => ({
-      // 🔥 Ensure ID is unique and productVariantId matches schema
-      id: `fallback-${img.id}`, 
-      imageUrl: img.imageUrl,
-      productVariantId: v.id, // ✅ Renamed from variantId
-    })),
-  }));
-}
+  const displayPrice =
+    variantPrices.length > 0
+      ? Math.min(...variantPrices)
+      : Number(product.price) || 0;
 
-return product;
+  const totalStock =
+    product.variants.length > 0
+      ? product.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0)
+      : Number(product.stock) || 0;
 
+  return {
+    ...product,
+    displayPrice,
+    totalStock,
+  };
 }
 
   /**
