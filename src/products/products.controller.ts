@@ -123,6 +123,11 @@ export class ProductsController {
     return this.productsService.addReview(productId, req.user.id, dto);
   }
 
+  @Get('search/preview')
+async getSearchPreview(@Query('q') query: string) {
+  return this.productsService.searchPreview(query);
+}
+
 
   @Post(':productId/variants')
 addVariant(

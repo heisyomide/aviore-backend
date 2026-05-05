@@ -374,6 +374,55 @@ private normalizeImages(product: any) {
   return product;
 }
 
+
+/**
+ * SEARCH_PREVIEW_PROTOCOL
+ * Lightweight query for instant frontend dropdowns
+ */
+async searchPreview(query: string) {
+  if (!query || query.length < 2) return [];
+
+  const products = await this.prisma.product.findMany({
+    where: {
+      isDeleted: false,
+      isActive: true,
+      status: 'APPROVED',
+      OR: [
+        { title: { contains: query, mode: 'insensitive' } },
+        { category: { name: { contains: query, mode: 'insensitive' } } },
+      ],
+    },
+    take: 6, // Keep it small for the dropdown
+    select: {
+      id: true,
+      title: true,
+      price: true,
+      images: {
+        take: 1,
+        select: { imageUrl: true },
+      },
+      variants: {
+        take: 1,
+        select: { price: true },
+      },
+    },
+  });
+
+  // Calculate the same displayPrice logic used in findAll
+  return products.map((p) => {
+    const displayPrice = p.variants.length > 0 
+      ? Number(p.variants[0].price) 
+      : Number(p.price);
+
+    return {
+      id: p.id,
+      title: p.title,
+      displayPrice,
+      imageUrl: p.images[0]?.imageUrl || null,
+    };
+  });
+}
+
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
    */
