@@ -7,6 +7,13 @@ import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 
 @Injectable()
 export class ProductsService {
+  private tokenize(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(' ')
+    .map((q) => q.trim())
+    .filter((q) => q.length > 0);
+}
   constructor(private prisma: PrismaService) {}
 
   /**
@@ -380,19 +387,30 @@ private normalizeImages(product: any) {
  * Lightweight query for instant frontend dropdowns
  */
 async searchPreview(query: string) {
-  if (!query || query.length < 2) return [];
+  if (!query || query.trim().length < 2) {
+    return {
+      suggestions: [],
+      products: [],
+      categories: [],
+    };
+  }
 
+  const tokens = this.tokenize(query);
+
+  // 🔥 PRODUCT SEARCH (TOKEN MATCHING)
   const products = await this.prisma.product.findMany({
     where: {
       isDeleted: false,
       isActive: true,
       status: 'APPROVED',
-      OR: [
-        { title: { contains: query, mode: 'insensitive' } },
-        { category: { name: { contains: query, mode: 'insensitive' } } },
-      ],
+      AND: tokens.map((token) => ({
+        OR: [
+          { title: { contains: token, mode: 'insensitive' } },
+          { category: { name: { contains: token, mode: 'insensitive' } } },
+        ],
+      })),
     },
-    take: 6, // Keep it small for the dropdown
+    take: 8,
     select: {
       id: true,
       title: true,
@@ -402,25 +420,69 @@ async searchPreview(query: string) {
         select: { imageUrl: true },
       },
       variants: {
-        take: 1,
         select: { price: true },
+      },
+      category: {
+        select: { name: true, slug: true },
       },
     },
   });
 
-  // Calculate the same displayPrice logic used in findAll
-  return products.map((p) => {
-    const displayPrice = p.variants.length > 0 
-      ? Number(p.variants[0].price) 
-      : Number(p.price);
+  // 🔥 CATEGORY MATCH
+  const categories = await this.prisma.category.findMany({
+    where: {
+      name: {
+        contains: query,
+        mode: 'insensitive',
+      },
+    },
+    take: 5,
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+    },
+  });
+
+  // 🔥 SUGGESTIONS (BASED ON TITLES)
+  const suggestions = await this.prisma.product.findMany({
+    where: {
+      title: {
+        contains: query,
+        mode: 'insensitive',
+      },
+    },
+    take: 5,
+    select: {
+      title: true,
+    },
+  });
+
+  // 🔥 MAP PRODUCTS WITH CORRECT PRICE LOGIC
+  const mappedProducts = products.map((p) => {
+    const variantPrices = p.variants
+      .map((v) => Number(v.price))
+      .filter((v) => v > 0);
+
+    const displayPrice =
+      variantPrices.length > 0
+        ? Math.min(...variantPrices)
+        : Number(p.price) || 0;
 
     return {
       id: p.id,
       title: p.title,
       displayPrice,
       imageUrl: p.images[0]?.imageUrl || null,
+      category: p.category?.name || '',
     };
   });
+
+  return {
+    suggestions: suggestions.map((s) => s.title),
+    products: mappedProducts,
+    categories,
+  };
 }
 
   /**
