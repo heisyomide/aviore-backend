@@ -1089,17 +1089,37 @@ async getVendorCustomers(vendorId: string) {
 // inside vendor.service.ts
 
 async getInventory(vendorId: string) {
-  return this.prisma.product.findMany({
+  const products = await this.prisma.product.findMany({
     where: { vendorId },
-    select: {
-      id: true,
-      title: true,
-      stock: true,
-      price: true,
+    include: {
       images: { take: 1 },
       category: { select: { name: true } },
+      variants: {
+        select: {
+          id: true,
+          price: true,
+          stock: true,
+        },
+      },
     },
-    orderBy: { stock: 'asc' }, // Low stock items at the top
+  });
+
+  return products.map((p) => {
+    const totalStock = p.variants.reduce(
+      (sum, v) => sum + (Number(v.stock) || 0),
+      0
+    );
+
+    const minPrice =
+      p.variants.length > 0
+        ? Math.min(...p.variants.map((v) => Number(v.price) || 0))
+        : Number(p.price) || 0;
+
+    return {
+      ...p,
+      displayStock: totalStock,
+      displayPrice: minPrice,
+    };
   });
 }
 
