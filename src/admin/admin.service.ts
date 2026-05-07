@@ -1091,6 +1091,14 @@ async approveWithdrawal(
           `Withdrawal ${id} not found`,
         );
       }
+      if (
+  request.status !==
+  WithdrawalStatus.PENDING
+) {
+  throw new BadRequestException(
+    'WITHDRAWAL_ALREADY_PROCESSED',
+  );
+}
 
       const bankDetails =
         request.bankDetails as {
@@ -1155,6 +1163,109 @@ async approveWithdrawal(
           'PAYOUT_TRANSFER_INITIATED',
         data: updatedRequest,
         transfer,
+      };
+    },
+  );
+}
+
+async rejectWithdrawal(
+  id: string,
+  adminId: string,
+  reason?: string,
+) {
+  return this.prisma.$transaction(
+    async (tx) => {
+
+      // =============================
+      // FIND REQUEST
+      // =============================
+      const request =
+        await tx.withdrawalRequest.findUnique({
+          where: { id },
+          include: {
+            vendor: true,
+          },
+        });
+
+      if (!request) {
+        throw new NotFoundException(
+          `Withdrawal ${id} not found`,
+        );
+      }
+
+
+      // =============================
+      // PREVENT DOUBLE ACTION
+      // =============================
+      if (
+        request.status !==
+        WithdrawalStatus.PENDING
+      ) {
+        throw new BadRequestException(
+          'WITHDRAWAL_ALREADY_PROCESSED',
+        );
+      }
+
+
+      // =============================
+      // RETURN FUNDS TO WALLET
+      // =============================
+      await tx.vendorWallet.update({
+        where: {
+          vendorId: request.vendorId,
+        },
+        data: {
+          availableBalance: {
+            increment: Number(
+              request.amount,
+            ),
+          },
+        },
+      });
+
+
+      // =============================
+      // UPDATE REQUEST STATUS
+      // =============================
+      const updatedRequest =
+        await tx.withdrawalRequest.update({
+          where: { id },
+          data: {
+            status:
+              WithdrawalStatus.REJECTED,
+
+            metadata: {
+              rejectedAt: new Date(),
+              rejectedBy: adminId,
+              rejectionReason:
+                reason ||
+                'Withdrawal rejected by admin',
+            },
+          },
+        });
+
+
+      // =============================
+      // AUDIT LOG
+      // =============================
+      await tx.auditLog.create({
+        data: {
+          adminId,
+          action:
+            AuditAction.REJECT_PAYOUT,
+          targetId: id,
+          targetType:
+            'WITHDRAWAL',
+          details: `PAYOUT REJECTED: ₦${request.amount}`,
+        },
+      });
+
+
+      return {
+        success: true,
+        message:
+          'WITHDRAWAL_REJECTED_AND_FUNDS_RETURNED',
+        data: updatedRequest,
       };
     },
   );

@@ -205,6 +205,19 @@ export class AdminController {
     return this.adminService.getPendingWithdrawals();
   }
 
+  @Patch(
+  'withdrawals/:id/reject',
+)
+async rejectWithdrawal(
+  @Param('id') id: string,
+  @Req() req,
+) {
+  return this.adminService.rejectWithdrawal(
+    id,
+    req.user.id,
+  );
+}
+
   @Patch('withdrawals/:id/approve')
   approveWithdrawal(
     @Param('id', ParseUUIDPipe) id: string,

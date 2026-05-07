@@ -99,24 +99,102 @@ export class SettlementService {
   accountNumber: string,
 ) {
   return this.prisma.$transaction(async (tx) => {
-    const wallet = await tx.vendorWallet.findUnique({
-      where: { vendorId },
-    });
+const wallet = await tx.vendorWallet.findUnique({
+  where: { vendorId },
+});
 
-    if (!wallet) {
-      throw new NotFoundException(
-        'WALLET_NOT_FOUND',
-      );
-    }
 
-    if (
-      Number(wallet.availableBalance) <
-      amount
-    ) {
-      throw new BadRequestException(
-        'INSUFFICIENT_BALANCE',
-      );
-    }
+// =============================
+// WALLET EXISTENCE VALIDATION
+// =============================
+if (!wallet) {
+  throw new NotFoundException(
+    'WALLET_NOT_FOUND',
+  );
+}
+
+
+// =============================
+// BANK DETAILS VALIDATION
+// =============================
+if (
+  !wallet.bankName ||
+  wallet.bankName.trim() === '' ||
+  !wallet.accoutNumber ||
+  wallet.accoutNumber.trim() === ''
+) {
+  throw new BadRequestException(
+    'PLEASE_ADD_BANK_DETAILS',
+  );
+}
+
+
+// =============================
+// ACCOUNT NUMBER VALIDATION
+// =============================
+if (
+  wallet.accoutNumber.length < 10
+) {
+  throw new BadRequestException(
+    'INVALID_ACCOUNT_NUMBER',
+  );
+}
+
+
+// =============================
+// AMOUNT VALIDATION
+// =============================
+if (!amount || amount <= 0) {
+  throw new BadRequestException(
+    'INVALID_WITHDRAWAL_AMOUNT',
+  );
+}
+
+
+// =============================
+// BALANCE VALIDATION
+// =============================
+const availableBalance = Number(
+  wallet.availableBalance || 0,
+);
+
+if (availableBalance < amount) {
+  throw new BadRequestException(
+    'INSUFFICIENT_BALANCE',
+  );
+}
+
+
+// =============================
+// OPTIONAL SAFETY BUFFER
+// (Prevents emptying wallet)
+// =============================
+
+// Example:
+// Leave ₦100 minimum reserve
+
+/*
+if (
+  availableBalance - amount < 100
+) {
+  throw new BadRequestException(
+    'MINIMUM_BALANCE_REQUIRED',
+  );
+}
+*/
+
+
+// =============================
+// WITHDRAWAL LIMIT SAFETY
+// =============================
+
+// Prevent absurd requests
+
+if (amount > 10000000) {
+  throw new BadRequestException(
+    'WITHDRAWAL_LIMIT_EXCEEDED',
+  );
+}
 
     const reference = `WDL-${Date.now()}`;
 
