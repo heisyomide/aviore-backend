@@ -17,13 +17,13 @@ export class AppliedCampaignDto {
   @ApiProperty({ example: 'Summer Sale 2024' })
   @IsString()
   @IsNotEmpty()
-  title: string;
+  title!: string;
 
   @ApiProperty({ example: 2500 })
   @Type(() => Number) 
   @IsNumber()
   @Min(0)
-  amount: number;
+  amount!: number;
 }
 
 // --- SUB-DTO: ORDER ITEM ---
@@ -31,19 +31,19 @@ export class OrderItemDto {
   @ApiProperty({ example: 'uuid-v4-product-id' })
   @IsUUID()
   @IsNotEmpty()
-  productId: string;
+  productId!: string;
 
   @ApiProperty({ example: 2 })
   @Type(() => Number)
   @IsNumber()
   @Min(1)
-  quantity: number;
+  quantity!: number;
 
   @ApiProperty({ example: 15000 })
   @Type(() => Number)
   @IsNumber()
   @Min(0)
-  price: number; 
+  price!: number; 
 }
 
 export class CreateOrderDto {
@@ -52,7 +52,7 @@ export class CreateOrderDto {
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
-  items: OrderItemDto[];
+  items!: OrderItemDto[];
 
   @ApiProperty({ type: [AppliedCampaignDto] })
   @IsOptional()
@@ -63,12 +63,12 @@ export class CreateOrderDto {
 
   @ApiProperty()
   @IsUUID()
-  addressId: string;
+  addressId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
-  paymentMethod: string;
+  paymentMethod!: string;
 
   @ApiPropertyOptional()
   @IsOptional()

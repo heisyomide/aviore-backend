@@ -25,99 +25,133 @@ async create(createOrderDto: CreateOrderDto, userId: string) {
   // 1. VERIFY USER
   const user = await this.prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      email: true,
-      firstName: true,
-    },
+    select: { email: true, firstName: true },
   });
 
-  if (!user) {
-    throw new NotFoundException('USER_NOT_FOUND');
-  }
+  if (!user) throw new NotFoundException('USER_NOT_FOUND');
 
-  // 2. PREPARE ORDER DATA
-  let calculatedSubtotal = 0;
-  let orderVendorId: string | null = null;
+  let subtotal = 0;
+  let vendorId: string | null = null;
 
-  const itemsWithDetails = await Promise.all(
+  // 2. FETCH PRODUCTS WITH VARIANTS
+  const items = await Promise.all(
     createOrderDto.items.map(async (item) => {
       const product = await this.prisma.product.findUnique({
         where: { id: item.productId },
+        include: {
+          variants: true,
+        },
       });
 
       if (!product || product.isDeleted) {
-        throw new NotFoundException(
-          `PRODUCT_NOT_FOUND: ${item.productId}`,
-        );
+        throw new NotFoundException(`PRODUCT_NOT_FOUND: ${item.productId}`);
       }
 
-      if (product.stock < item.quantity) {
-        throw new BadRequestException(
-          `INSUFFICIENT_STOCK: ${product.title}`,
-        );
+      // ✅ CALCULATE TOTAL STOCK (CRITICAL FIX)
+const totalStock =
+  product.variants.length > 0
+    ? product.variants.reduce(
+        (sum, v) => sum + Number(v.stock || 0),
+        0,
+      )
+    : Number(product.stock || 0);
+
+      if (totalStock < item.quantity) {
+        throw new BadRequestException(`INSUFFICIENT_STOCK: ${product.title}`);
       }
 
-      if (!orderVendorId) {
-        orderVendorId = product.vendorId;
-      }
+      // ✅ USE DISPLAY PRICE LOGIC
+const displayPrice =
+  product.variants.length > 0
+    ? Math.min(
+        ...product.variants.map((v) =>
+          Number(v.price || product.price),
+        ),
+      )
+    : Number(product.price);
+      if (!vendorId) vendorId = product.vendorId;
 
-      const itemTotal =
-        Number(product.price) * item.quantity;
-
-      calculatedSubtotal += itemTotal;
+      const itemTotal = Number (displayPrice) * item.quantity;
+      subtotal += itemTotal;
 
       return {
         productId: product.id,
         quantity: item.quantity,
-        priceAtPurchase: Number(product.price),
+        priceAtPurchase: Number (displayPrice),
       };
-    }),
+    })
   );
 
-  if (!orderVendorId) {
-    throw new BadRequestException(
-      'VENDOR_RESOLUTION_FAILED',
-    );
+  if (!vendorId) {
+    throw new BadRequestException('VENDOR_RESOLUTION_FAILED');
   }
 
-  // 3. CALCULATE FINAL AMOUNT
-  const totalDiscount =
-    createOrderDto.appliedCampaigns?.reduce(
-      (sum, camp) => sum + camp.amount,
-      0,
-    ) || 0;
+  // 3. DISCOUNT
+  const discount =
+    createOrderDto.appliedCampaigns?.reduce((sum, c) => sum + c.amount, 0) || 0;
 
-  const finalAuthorizedAmount = Math.max(
-    0,
-    calculatedSubtotal - totalDiscount,
-  );
+  const total = Math.max(0, subtotal - discount);
 
-  // 4. CREATE ORDER INSIDE TRANSACTION
-  // 4. CREATE ORDER INSIDE TRANSACTION
-const order = await this.prisma.$transaction(
-  async (tx) => {
-    // A. Create the Order (Your existing code)
+  // 4. TRANSACTION (WITH STOCK UPDATE 🔥)
+  const order = await this.prisma.$transaction(async (tx) => {
+    // 🔥 CRITICAL: UPDATE STOCK HERE (prevents overselling)
+    for (const item of createOrderDto.items) {
+      const product = await tx.product.findUnique({
+        where: { id: item.productId },
+        include: { variants: true },
+      });
+
+      if (!product) continue;
+
+      if (product.variants.length > 0) {
+        // Reduce from variants (simple strategy: deduct from first available)
+        let qtyToReduce = item.quantity;
+
+        for (const variant of product.variants) {
+          if (qtyToReduce <= 0) break;
+
+          const available = Number(variant.stock || 0);
+          const reduceBy = Math.min(available, qtyToReduce);
+
+          if (reduceBy > 0) {
+            await tx.productVariant.update({
+              where: { id: variant.id },
+              data: { stock: { decrement: reduceBy } },
+            });
+
+            qtyToReduce -= reduceBy;
+          }
+        }
+      } else {
+        await tx.product.update({
+          where: { id: product.id },
+          data: { stock: { decrement: item.quantity } },
+        });
+      }
+    }
+
+    // CREATE ORDER
     const newOrder = await tx.order.create({
       data: {
         userId,
         addressId: createOrderDto.addressId,
-        vendorId: orderVendorId!,
+        vendorId: vendorId!,
         status: 'PENDING',
-        totalAmount: finalAuthorizedAmount,
+        totalAmount: total,
 
         campaignLogs: {
           create:
-            createOrderDto.appliedCampaigns?.map((camp) => ({
-              title: camp.title,
-              discountAmount: camp.amount,
+            createOrderDto.appliedCampaigns?.map((c) => ({
+              title: c.title,
+              discountAmount: c.amount,
             })) || [],
         },
 
         items: {
-          create: itemsWithDetails.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            priceAtPurchase: item.priceAtPurchase,
+          create: items.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            priceAtPurchase: i.priceAtPurchase,
           })),
         },
       },
@@ -127,59 +161,43 @@ const order = await this.prisma.$transaction(
       },
     });
 
-    // 🛡️ B. KILL THE GHOST CART HERE
-    // This wipes all items from the user's cart in the DB 
-    // immediately after the order is created.
+    // CLEAR CART
     await tx.cartItem.deleteMany({
-      where: {
-        cart: {
-          userId: userId,
-        },
-      },
+      where: { cart: { userId } },
     });
 
     return newOrder;
-  },
-  {
-    timeout: 10000,
-  },
-);
+  });
 
-  // 5. INITIALIZE PAYMENT OUTSIDE TRANSACTION
-// orders.service.ts
+  // 5. PAYMENT
+  try {
+    const payment = await this.paymentsService.initializePayment(
+      order.id,
+      user.email,
+      user.firstName || 'Customer'
+    );
 
-try {
-  const paymentData = await this.paymentsService.initializePayment(
-    order.id,
-    user.email,
-    user.firstName || 'Customer',
-  );
+    return {
+      success: true,
+      message: 'TRANSACTION_AUTHORIZED',
+      data: {
+        orderId: order.id,
+        paymentLink: payment.link,
+        valuation: order.totalAmount,
+      },
+    };
+  } catch (err: any) {
+    console.error("PAYMENT_LINK_GEN_FAILED:", err?.message || err);
 
-  return {
-    success: true,
-    message: 'TRANSACTION_AUTHORIZED',
-    data: {
-      orderId: order.id,
-      paymentLink: paymentData.link, // 🛡️ This is the link we need
-      valuation: order.totalAmount,
-    },
-  };
-} catch (error:any) {
-  console.error(
-    "PAYMENT_LINK_GEN_FAILED:",
-    error?.message || error
-  );
-
-
-  return {
-    success: false, // 🚨 CHANGE THIS TO FALSE
-    message: 'PAYMENT_GATEWAY_UNREACHABLE',
-    data: {
-      orderId: order.id,
-      paymentLink: null,
-    },
-  };
-}
+    return {
+      success: false,
+      message: 'PAYMENT_GATEWAY_UNREACHABLE',
+      data: {
+        orderId: order.id,
+        paymentLink: null,
+      },
+    };
+  }
 }
   /**
    * FIND_USER_ORDERS
@@ -192,8 +210,9 @@ try {
 async findUserOrders(userId: string) {
   return this.prisma.order.findMany({
     where: { userId },
+    orderBy: { createdAt: 'desc' },
+
     include: {
-      // 1. Artifact Node Mapping
       items: {
         include: {
           product: {
@@ -202,13 +221,12 @@ async findUserOrders(userId: string) {
                 select: { imageUrl: true },
                 take: 1,
               },
-              // Fetch user-specific evaluation and vendor response
               reviews: {
                 where: { userId },
                 select: {
                   rating: true,
                   comment: true,
-                  reply: true, // The Vendor's Response
+                  reply: true,
                   createdAt: true,
                 },
                 take: 1,
@@ -217,15 +235,15 @@ async findUserOrders(userId: string) {
           },
         },
       },
-      // 2. Fulfillment Origin Identity
+
       vendor: {
         select: {
           storeName: true,
-          // logo: true, // Uncomment if 'logo' exists in your schema
         },
       },
-      // 3. Destination & Settlement Data
+
       address: true,
+
       payment: {
         select: {
           status: true,
@@ -234,9 +252,6 @@ async findUserOrders(userId: string) {
         },
       },
     },
-    // Ensure we also grab direct Order fields used by the UI
-    // trackingNumber and carrier are included by default unless using 'select'
-    orderBy: { createdAt: 'desc' },
   });
 }
 
