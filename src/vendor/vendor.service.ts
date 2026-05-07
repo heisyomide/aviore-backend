@@ -214,74 +214,80 @@ async getPublicProfileBySlug(slug: string) {
 
 
 async requestWithdrawal(vendorId: string, amount: number) {
-  const wallet = await this.prisma.vendorWallet.findUnique({ 
+  const wallet = await this.prisma.vendorWallet.findUnique({
     where: { vendorId },
-    include: { 
-      vendor: { 
-        include: { 
-          user: { select: { email: true } } 
-        } 
-      } 
-    } 
+    include: {
+      vendor: true, // IMPORTANT: get full vendor profile
+    },
   });
 
-  if (!wallet || Number(wallet.availableBalance) < amount) {
-    throw new BadRequestException('Insufficient available balance for withdrawal protocol');
+  if (!wallet) {
+    throw new NotFoundException('WALLET_NOT_FOUND');
+  }
+
+  if (Number(wallet.availableBalance) < amount) {
+    throw new BadRequestException(
+      'INSUFFICIENT_AVAILABLE_BALANCE'
+    );
+  }
+
+  // =========================
+  // BANK VALIDATION (CRITICAL)
+  // =========================
+  const vendor = wallet.vendor;
+
+  if (
+    !vendor.bankName ||
+    !vendor.accountNumber ||
+    !vendor.accountNumber
+  ) {
+    throw new BadRequestException(
+      'BANK_DETAILS_NOT_CONFIGURED'
+    );
   }
 
   return this.prisma.$transaction(async (tx) => {
-    // 1. Deduct from wallet immediately
+    // 1. MOVE MONEY TO PENDING (NOT JUST DECREMENT)
     await tx.vendorWallet.update({
       where: { vendorId },
-      data: { availableBalance: { decrement: amount } }
+      data: {
+        availableBalance: { decrement: amount },
+        pendingBalance: { increment: amount },
+      },
     });
 
-    // 2. Initialize the Withdrawal Request with REQUIRED bankDetails
+    // 2. CREATE WITHDRAWAL REQUEST (REAL BANK DATA)
     const request = await tx.withdrawalRequest.create({
       data: {
-        amount: amount, // Prisma handles number to Decimal conversion
+        amount,
         vendorId,
         status: 'PENDING',
-        // In a production app, you would fetch these from the Vendor's stored payout profile
+
         bankDetails: {
-          bankName: "Registry Settlement Bank",
-          accountNumber: "0000000000",
-          accountName: wallet.vendor.storeName
+          bankName: vendor.bankName,
+          accountNumber: vendor.accountNumber,
+          accountName: vendor.accountNumber,
         },
+
         metadata: {
-          requestedBy: wallet.vendor.user.email,
-          ipAddress: "Handshake_Protocol_Secure"
-        }
-      }
+          requestedAt: new Date(),
+          vendorEmail: vendor.userId ? 'linked' : null,
+        },
+      },
     });
 
-    // 3. Log the Debit Transaction for the Vendor's ledger
+    // 3. LEDGER ENTRY
     await tx.walletTransaction.create({
       data: {
         vendorId,
         amount: -amount,
         type: 'WITHDRAW',
         status: 'PENDING',
-        reference: `WDR-${request.id.slice(-6).toUpperCase()}`
-      }
+        reference: `WDR-${request.id.slice(-8).toUpperCase()}`,
+      },
     });
 
     return request;
-  });
-}
-
-private async reverseWithdrawal(
-  tx: Prisma.TransactionClient,
-  vendorId: string,
-  amount: number,
-) {
-  await tx.vendorWallet.update({
-    where: { vendorId },
-    data: {
-      availableBalance: {
-        increment: amount
-      }
-    }
   });
 }
   // --- PLATFORM TICKETS (Admin Support) ---
