@@ -1128,6 +1128,17 @@ async approveWithdrawal(
           reference: `PAYOUT-${request.id}`,
         });
 
+        await tx.vendorWallet.update({
+  where: {
+    vendorId: request.vendorId,
+  },
+  data: {
+    pendingBalance: {
+      decrement: Number(request.amount),
+    },
+  },
+});
+
       const updatedRequest =
         await tx.withdrawalRequest.update({
           where: { id },
@@ -1145,6 +1156,17 @@ async approveWithdrawal(
             },
           },
         });
+
+        await tx.walletTransaction.updateMany({
+  where: {
+    withdrawalRequestId: request.id,
+    type: 'WITHDRAW',
+    status: 'PENDING',
+  },
+  data: {
+    status: 'COMPLETED',
+  },
+});
 
       await tx.auditLog.create({
         data: {
@@ -1210,18 +1232,20 @@ async rejectWithdrawal(
       // =============================
       // RETURN FUNDS TO WALLET
       // =============================
-      await tx.vendorWallet.update({
-        where: {
-          vendorId: request.vendorId,
-        },
-        data: {
-          availableBalance: {
-            increment: Number(
-              request.amount,
-            ),
-          },
-        },
-      });
+await tx.vendorWallet.update({
+  where: {
+    vendorId: request.vendorId,
+  },
+  data: {
+    availableBalance: {
+      increment: Number(request.amount),
+    },
+
+    pendingBalance: {
+      decrement: Number(request.amount),
+    },
+  },
+});
 
 
       // =============================
@@ -1243,6 +1267,17 @@ async rejectWithdrawal(
             },
           },
         });
+
+        await tx.walletTransaction.updateMany({
+  where: {
+    withdrawalRequestId: request.id,
+    type: 'WITHDRAW',
+    status: 'PENDING',
+  },
+  data: {
+    status: 'REJECTED',
+  },
+});
 
 
       // =============================
