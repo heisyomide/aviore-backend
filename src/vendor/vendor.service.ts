@@ -239,7 +239,7 @@ async requestWithdrawal(vendorId: string, amount: number) {
   if (
     !vendor.bankName ||
     !vendor.accountNumber ||
-    !vendor.accountNumber
+    !vendor.accountName
   ) {
     throw new BadRequestException(
       'BANK_DETAILS_NOT_CONFIGURED'
