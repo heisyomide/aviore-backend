@@ -265,6 +265,7 @@ async requestWithdrawal(vendorId: string, amount: number) {
 
         bankDetails: {
           bankName: vendor.bankName,
+          bankCode: vendor.bankCode,
           accountNumber: vendor.accountNumber,
           accountName: vendor.accountName,
         },
@@ -474,6 +475,7 @@ async getFullProfile(vendorId: string) {
 bankName: vendor.bankName || '',
 accountNumber: vendor.accountNumber || '',
 accountName: vendor.accountName || '',
+bankCode: vendor.bankCode ||'',
     isVerified: vendor.isVerified,
     kycStatus: vendor.kycStatus,
   };
@@ -488,6 +490,7 @@ async updateFullProfile(vendorId: string, data: {
   bankName?: string;
   accountNumber?: string;
   accountName?: string;
+  bankCode?: string;
 }) {
   // 1. Slug Validation (only if slug is being updated)
   if (data.slug) {
@@ -521,6 +524,7 @@ async updateFullProfile(vendorId: string, data: {
         bankName: data.bankName,
         accountNumber: data.accountNumber,
         accountName: data.accountName,
+        bankCode: data.bankCode,
       },
     });
 
