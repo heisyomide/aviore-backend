@@ -500,6 +500,7 @@ model CartItem {
   id        String   @id @default(cuid())
   cartId    String
   productId String
+  variantId String
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
 
@@ -507,7 +508,7 @@ model CartItem {
   product Product @relation(fields: [productId], references: [id])
 
   // 🛡️ CRITICAL LOCK: This stops the duplicate quantity glitch
-  @@unique([cartId, productId])
+  @@unique([cartId, productId, variantId])
   @@index([cartId])
   @@index([productId])
 }

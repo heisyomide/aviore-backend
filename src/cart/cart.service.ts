@@ -29,19 +29,19 @@ async getCart(userId: string) {
   });
 }
 
-  async addItem(userId: string, productId: string, quantity: number) {
+  async addItem(userId: string, productId: string, quantity: number, variantId?: string) {
     const cart = await this.getCart(userId);
 
     // 🚀 ATOMIC UPSERT: This prevents the "1 becomes 8" glitch.
     // If multiple requests hit at once, Prisma handles them one by one on the same record.
     return this.prisma.cartItem.upsert({
-      where: {
-        // This requires a @@unique([cartId, productId]) in your prisma schema
-        cartId_productId: {
-          cartId: cart.id,
-          productId,
-        },
-      },
+where: {
+  cartId_productId_variantId: {
+    cartId: cart.id,
+    productId,
+    variantId: variantId || null,
+  },
+},
       update: {
         quantity: { increment: quantity },
       },
