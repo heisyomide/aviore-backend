@@ -48,4 +48,17 @@ async webhook(
     message: 'Webhook processed',
   };
 }
+
+@Post('transfer-webhook')
+async handleTransferWebhook(
+  @Headers('verif-hash')
+  signature: string,
+
+  @Body() body: any,
+) {
+  return this.paymentsService.handleTransferWebhook(
+    signature,
+    body,
+  );
+}
 }

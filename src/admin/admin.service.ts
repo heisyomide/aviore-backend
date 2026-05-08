@@ -1144,7 +1144,7 @@ async approveWithdrawal(
           where: { id },
           data: {
             status:
-              WithdrawalStatus.APPROVED,
+              WithdrawalStatus.PROCESSING,
             metadata: {
               transferId:
                 transfer.id,

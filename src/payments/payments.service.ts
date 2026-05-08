@@ -380,6 +380,189 @@ export class PaymentsService implements OnModuleInit {
     );
   }
 
+
+
+
+  // =====================================================
+// TRANSFER WEBHOOK
+// =====================================================
+
+async handleTransferWebhook(
+  signature: string,
+  body: any,
+) {
+  const secretHash =
+    process.env.FLW_WEBHOOK_HASH;
+
+  if (
+    !signature ||
+    signature !== secretHash
+  ) {
+    throw new BadRequestException(
+      'INVALID_SIGNATURE',
+    );
+  }
+
+  const payload = body?.data;
+
+  if (!payload) {
+    throw new BadRequestException(
+      'INVALID_PAYLOAD',
+    );
+  }
+
+  const reference =
+    payload.reference;
+
+  const transferStatus =
+    String(
+      payload.status,
+    ).toLowerCase();
+
+  return this.prisma.$transaction(
+    async (tx) => {
+
+      // ===================================
+      // FIND WITHDRAWAL
+      // ===================================
+
+      const withdrawal =
+        await tx.withdrawalRequest.findFirst({
+          where: {
+            metadata: {
+              path: ['transferRef'],
+              equals: reference,
+            },
+          },
+        });
+
+      if (!withdrawal) {
+        throw new NotFoundException(
+          'WITHDRAWAL_NOT_FOUND',
+        );
+      }
+
+      // ===================================
+      // SUCCESS
+      // ===================================
+
+      if (
+        [
+          'successful',
+          'success',
+          'completed',
+        ].includes(
+          transferStatus,
+        )
+      ) {
+
+        await tx.withdrawalRequest.update({
+          where: {
+            id: withdrawal.id,
+          },
+          data: {
+            status: 'COMPLETED',
+
+            metadata: {
+              ...(withdrawal.metadata as any),
+
+              completedAt:
+                new Date(),
+
+              flutterwaveStatus:
+                transferStatus,
+            },
+          },
+        });
+
+        await tx.walletTransaction.updateMany({
+          where: {
+            withdrawalRequestId:
+              withdrawal.id,
+          },
+          data: {
+            status:
+              'COMPLETED',
+          },
+        });
+
+        return {
+          status: 'COMPLETED',
+        };
+      }
+
+      // ===================================
+      // FAILED
+      // ===================================
+
+      if (
+        [
+          'failed',
+          'error',
+          'reversed',
+        ].includes(
+          transferStatus,
+        )
+      ) {
+
+        // RETURN MONEY
+        await tx.vendorWallet.update({
+          where: {
+            vendorId:
+              withdrawal.vendorId,
+          },
+          data: {
+            availableBalance: {
+              increment:
+                Number(
+                  withdrawal.amount,
+                ),
+            },
+          },
+        });
+
+        await tx.withdrawalRequest.update({
+          where: {
+            id: withdrawal.id,
+          },
+          data: {
+            status: 'FAILED',
+
+            metadata: {
+              ...(withdrawal.metadata as any),
+
+              failedAt:
+                new Date(),
+
+              flutterwaveStatus:
+                transferStatus,
+            },
+          },
+        });
+
+        await tx.walletTransaction.updateMany({
+          where: {
+            withdrawalRequestId:
+              withdrawal.id,
+          },
+          data: {
+            status:
+              'FAILED',
+          },
+        });
+
+        return {
+          status: 'FAILED',
+        };
+      }
+
+      return {
+        status: 'IGNORED',
+      };
+    },
+  );
+}
+
   // =====================================================
   // ESCROW SPLIT
   // =====================================================

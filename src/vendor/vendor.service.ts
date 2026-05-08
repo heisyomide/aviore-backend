@@ -278,15 +278,23 @@ async requestWithdrawal(vendorId: string, amount: number) {
     });
 
     // 3. LEDGER ENTRY
-    await tx.walletTransaction.create({
-      data: {
-        vendorId,
-        amount: -amount,
-        type: 'WITHDRAW',
-        status: 'PENDING',
-        reference: `WDR-${request.id.slice(-8).toUpperCase()}`,
-      },
-    });
+await tx.walletTransaction.create({
+  data: {
+    vendorId,
+    amount: -amount,
+    type: 'WITHDRAW',
+    status: 'PENDING',
+
+    withdrawalRequestId: request.id,
+
+    reference: `WDR-${request.id
+      .slice(-8)
+      .toUpperCase()}`,
+
+    description:
+      'Withdrawal request initiated',
+  },
+});
 
     return request;
   });

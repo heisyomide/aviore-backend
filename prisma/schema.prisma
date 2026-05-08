@@ -564,7 +564,8 @@ enum PaymentStatus {
 
 enum WithdrawalStatus {
   PENDING
-  APPROVED
+  PROCESSING
+  FAILED
   REJECTED
   COMPLETED
 }
