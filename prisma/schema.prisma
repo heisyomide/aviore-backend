@@ -191,6 +191,7 @@ model Vendor {
   bankName             String? // Ensure these are inside the Vendor model
   accountNumber        String? // Ensure these are inside the Vendor model
   // ... rest of model
+  accountName          String?
   slug                 String?               @unique // Add this for the URL
   description          String?               @db.Text // Add this for the About section
   shippingFee          Float                 @default(0.0) // Add this for Logistics

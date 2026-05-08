@@ -266,7 +266,7 @@ async requestWithdrawal(vendorId: string, amount: number) {
         bankDetails: {
           bankName: vendor.bankName,
           accountNumber: vendor.accountNumber,
-          accountName: vendor.accountNumber,
+          accountName: vendor.accountName,
         },
 
         metadata: {
@@ -471,8 +471,9 @@ async getFullProfile(vendorId: string) {
     description: vendor.description || '',
     shippingFee: vendor.shippingFee || 0,
     // Fetching bank details from the linked vendorWallet
-    bankName: (vendor.vendorWallet as any)?.bankName || 'Not Set',
-    accountNumber: (vendor.vendorWallet as any)?.accountNumber || '',
+bankName: vendor.bankName || '',
+accountNumber: vendor.accountNumber || '',
+accountName: vendor.accountName || '',
     isVerified: vendor.isVerified,
     kycStatus: vendor.kycStatus,
   };
@@ -486,6 +487,7 @@ async updateFullProfile(vendorId: string, data: {
   shippingFee?: number;
   bankName?: string;
   accountNumber?: string;
+  accountName?: string;
 }) {
   // 1. Slug Validation (only if slug is being updated)
   if (data.slug) {
@@ -518,6 +520,7 @@ async updateFullProfile(vendorId: string, data: {
         shippingFee: data.shippingFee !== undefined ? Number(data.shippingFee) : undefined,
         bankName: data.bankName,
         accountNumber: data.accountNumber,
+        accountName: data.accountName,
       },
     });
 

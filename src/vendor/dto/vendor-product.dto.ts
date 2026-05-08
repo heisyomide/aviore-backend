@@ -5,27 +5,27 @@ export class VendorCreateProductDto {
   @ApiProperty({ example: 'Wireless Headphones' })
   @IsString()
   @MinLength(3)
-  title: string;
+  title!: string;
 
   @ApiProperty({ example: 'Premium noise-canceling over-ear headphones.' })
   @IsString()
   @IsNotEmpty()
-  description: string;
+  description!: string;
 
   @ApiProperty({ example: 99.99 })
   @IsNumber()
   @IsPositive()
-  price: number;
+  price!: number;
 
   @ApiProperty({ example: 50 })
   @IsNumber()
   @Min(0)
-  stock: number;
+  stock!: number;
 
   @ApiProperty({ example: 'uuid-of-category' })
   @IsUUID() // Matches your Prisma Category relation
   @IsNotEmpty()
-  categoryId: string;
+  categoryId!: string;
 
   @ApiProperty({ 
     required: false, 
