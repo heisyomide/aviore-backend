@@ -336,6 +336,7 @@ model Product {
   title            String
   description      String
   price            Decimal           @db.Decimal(12, 2)
+  oldPrice         Float?
   stock            Int               @default(0)
   sku              String?           @unique
   status           ProductStatus     @default(PENDING)
