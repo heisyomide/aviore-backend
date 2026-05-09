@@ -267,7 +267,7 @@ async recordProductView(userId: string, productId: string) {
         update: { viewedAt: new Date() },
         create: { userId, productId },
       });
-    } catch (error) {
+    } catch (error:any) {
       this.logger.error(`HISTORY_RECORD_ERROR: ${error.message}`);
       throw error;
     }
@@ -277,26 +277,30 @@ async recordProductView(userId: string, productId: string) {
    * 📂 GET USER HISTORY
    * Optimized to fetch only necessary UI artifacts.
    */
-  async getHistory(userId: string) {
-    return this.prisma.browsingHistory.findMany({
-      where: { userId },
-      include: {
-        product: {
-          select: {
-            id: true,
-            title: true,
-            price: true,
-            images: {
-              take: 1, // Only need the first image for history cards
-              select: { imageUrl: true }
-            },
+async getHistory(userId: string) {
+  return this.prisma.browsingHistory.findMany({
+    where: { userId },
+    include: {
+      product: {
+        select: {
+          id: true,
+          title: true,
+          price: true,        // Base price
+          oldPrice: true,     // For the strike-through
+          discount: true,     // For the -15% badge
+          origin: true,       // For the "LOCAL" badge
+          variants: true,     // CRITICAL: Needed for price/stock calculation
+          images: {
+            take: 1,
+            select: { imageUrl: true }
           },
         },
       },
-      orderBy: { viewedAt: 'desc' },
-      take: 30, // Firm limit: keeps the dashboard fast and clean
-    });
-  }
+    },
+    orderBy: { viewedAt: 'desc' },
+    take: 30,
+  });
+}
 
   /**
    * 🗑️ CLEAR REGISTRY
@@ -306,7 +310,7 @@ async recordProductView(userId: string, productId: string) {
       return await this.prisma.browsingHistory.deleteMany({
         where: { userId },
       });
-    } catch (error) {
+    } catch (error:any) {
       this.logger.error(`HISTORY_CLEAR_ERROR: ${error.message}`);
       throw new Error("Failed to clear browsing registry.");
     }
