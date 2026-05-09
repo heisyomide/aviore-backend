@@ -6,8 +6,8 @@ export class CartService {
   private readonly logger = new Logger(CartService.name);
   constructor(private prisma: PrismaService) {}
 
+// Inside cart.service.ts
 async getCart(userId: string) {
-  // 🛡️ Enhanced Sync: Fetching products WITH their image registry
   return this.prisma.cart.upsert({
     where: { userId },
     update: {},
@@ -17,11 +17,10 @@ async getCart(userId: string) {
         include: { 
           product: {
             include: {
-              // 🖼️ CRITICAL: Replace 'images' with the actual field name 
-              // in your Product model (e.g., productImages, gallery, etc.)
-              images: true 
+              images: true,
+              variants: true // 👈 VERY IMPORTANT: Must match ProductCard data structure
             }
-          } 
+          }
         },
         orderBy: { createdAt: 'asc' }
       } 
