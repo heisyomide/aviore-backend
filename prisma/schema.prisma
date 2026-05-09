@@ -500,7 +500,7 @@ model CartItem {
   id        String   @id @default(cuid())
   cartId    String
   productId String
-  variantId String
+  variantId String?
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
 

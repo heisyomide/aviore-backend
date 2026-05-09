@@ -29,29 +29,74 @@ async getCart(userId: string) {
   });
 }
 
-  async addItem(userId: string, productId: string, quantity: number, variantId?: string) {
-    const cart = await this.getCart(userId);
+async addItem(
+  userId: string,
+  productId: string,
+  quantity: number,
+  variantId?: string,
+) {
+  const cart = await this.getCart(userId);
 
-    // 🚀 ATOMIC UPSERT: This prevents the "1 becomes 8" glitch.
-    // If multiple requests hit at once, Prisma handles them one by one on the same record.
+  // ✅ VARIANT PRODUCT
+  if (variantId) {
     return this.prisma.cartItem.upsert({
-where: {
-  cartId_productId_variantId: {
-    cartId: cart.id,
-    productId,
-    variantId: variantId || null,
-  },
-},
-      update: {
-        quantity: { increment: quantity },
+      where: {
+        cartId_productId_variantId: {
+          cartId: cart.id,
+          productId,
+          variantId,
+        },
       },
+
+      update: {
+        quantity: {
+          increment: quantity,
+        },
+      },
+
       create: {
         cartId: cart.id,
         productId,
+        variantId,
         quantity,
       },
     });
   }
+
+  // ✅ NORMAL PRODUCT (NO VARIANT)
+  const existingItem =
+    await this.prisma.cartItem.findFirst({
+      where: {
+        cartId: cart.id,
+        productId,
+        variantId: null,
+      },
+    });
+
+  if (existingItem) {
+    return this.prisma.cartItem.update({
+      where: {
+        id: existingItem.id,
+      },
+
+      data: {
+        quantity: {
+          increment: quantity,
+        },
+      },
+    });
+  }
+
+  return this.prisma.cartItem.create({
+    data: {
+      cartId: cart.id,
+      productId,
+      variantId: null,
+      quantity,
+    },
+  });
+}
+
 
   async removeItem(cartItemId: string) {
     try {
@@ -60,7 +105,7 @@ where: {
       return await this.prisma.cartItem.deleteMany({
         where: { id: cartItemId },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`CART_DELETE_ERROR: ${error.message}`);
       throw new NotFoundException("Cart item already removed from registry.");
     }
