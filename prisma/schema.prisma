@@ -403,8 +403,9 @@ model ProductVariant {
 
   images VariantImage[]
 
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  cartItems CartItem[]
 
   @@unique([productId, color, size, material])
 }
@@ -507,7 +508,8 @@ model CartItem {
   cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
 
-  // 🛡️ CRITICAL LOCK: This stops the duplicate quantity glitch
+  variant ProductVariant? @relation(fields: [variantId], references: [id])
+
   @@unique([cartId, productId, variantId])
   @@index([cartId])
   @@index([productId])
