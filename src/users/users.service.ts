@@ -287,7 +287,6 @@ async getHistory(userId: string) {
           title: true,
           price: true,        // Base price
           oldPrice: true,     // For the strike-through
-          discount: true,     // For the -15% badge
           origin: true,       // For the "LOCAL" badge
           variants: true,     // CRITICAL: Needed for price/stock calculation
           images: {
