@@ -29,7 +29,7 @@ export class CreateProductDto {
 
   @ApiProperty({ example: 99.99 })
   @IsNumber()
-  @IsPositive()
+  @Min(0)
   @IsOptional()
   price?: number;                    // Made optional - variants will drive pricing
 
