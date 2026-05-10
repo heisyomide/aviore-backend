@@ -25,7 +25,7 @@ export class CreateVariantDto {
   @ApiProperty({ example: 12999.99, required: false })
   @IsOptional()
   @IsNumber()
-  @IsPositive()
+  @Min(0)
   price?: number;
 
   @ApiProperty({ example: 50, required: false })
