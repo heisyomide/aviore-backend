@@ -304,15 +304,20 @@ async update(id: string, dto: UpdateProductDto, userId: string) {
     for (const v of incomingVariants) {
       const variant = await tx.productVariant.upsert({
         where: { id: v.id || 'new-id' },
-        create: {
-          productId,
-          color: v.color,
-          sizes: v.sizes,
-        },
-        update: {
-          color: v.color,
-          sizes: v.sizes,
-        },
+create: {
+  productId,
+  color: v.color,
+  size: v.size,
+  price: v.price,
+  stock: v.stock,
+},
+
+update: {
+  color: v.color,
+  size: v.size,
+  price: v.price,
+  stock: v.stock,
+},
       });
 
       // Sync Variant Images
