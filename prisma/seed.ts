@@ -25,8 +25,8 @@ const categoriesData = [
   {
     name: 'Fashion',
     children: [
-      { name: 'Men', children: ['T-Shirts', 'Shirts', 'Jeans', 'Trousers', 'Suits', 'Footwear', 'Watches', 'Sunglasses'] },
-      { name: 'Women', children: ['Dresses', 'Tops', 'Skirts', 'Jeans', 'Handbags', 'Heels', 'Jewelry'] },
+      { name: 'Men', children: ['T-Shirts', 'Shirts', 'Jeans', 'Trousers', 'Suits', 'Footwear', 'Watches', 'Sunglasses', 'Caps'] },
+      { name: 'Women', children: ['Dresses', 'Tops', 'Skirts', 'Jeans', 'Handbags', 'Heels', 'Jewelry', 'Caps'] },
       { name: 'Kids & Baby', children: ['Boys Clothing', 'Girls Clothing', 'Baby Essentials', 'School Shoes'] },
     ],
   },
