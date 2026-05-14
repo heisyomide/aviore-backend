@@ -82,70 +82,133 @@ async register(registerDto: RegisterDto) {
 async login(loginDto: LoginDto, req: any) {
   const { email, password } = loginDto;
 
-  // 1. METADATA
+  // =========================
+  // REQUEST METADATA
+  // =========================
   const ip = this.extractClientIp(req);
-  const userAgent = req.headers?.['user-agent'] || 'Unknown Device';
+  const userAgent =
+    req.headers?.['user-agent'] || 'Unknown Device';
 
-  // 2. FETCH USER
+  // =========================
+  // FIND USER
+  // =========================
   const user = await this.prisma.user.findUnique({
     where: { email },
     include: {
       vendor: {
-        select: { id: true, isVerified: true, kycStatus: true },
+        select: {
+          id: true,
+          isVerified: true,
+          kycStatus: true,
+        },
       },
     },
   });
 
-  // 3. VALIDATE PASSWORD
-  const isPasswordValid = user && (await bcrypt.compare(password, user.password));
-
-  if (!user || !isPasswordValid) {
+  // =========================
+  // INVALID USER
+  // =========================
+  if (!user) {
     this.prisma.loginLog.create({
-      data: { email, ip, userAgent, status: 'FAILED' },
+      data: {
+        email,
+        ip,
+        userAgent,
+        status: 'FAILED',
+      },
     }).catch(() => {});
 
-    throw new UnauthorizedException('INVALID_CREDENTIALS');
+    throw new UnauthorizedException(
+      'Invalid email or password',
+    );
   }
 
-  // ✅ 4. GENERATE SESSION ID FIRST
+  // =========================
+  // PASSWORD CHECK
+  // =========================
+  const isPasswordValid = await bcrypt.compare(
+    password,
+    user.password,
+  );
+
+  if (!isPasswordValid) {
+    this.prisma.loginLog.create({
+      data: {
+        email,
+        ip,
+        userAgent,
+        status: 'FAILED',
+      },
+    }).catch(() => {});
+
+    throw new UnauthorizedException(
+      'Invalid email or password',
+    );
+  }
+
+  // =========================
+  // GENERATE SESSION ID
+  // =========================
   const sessionId = crypto.randomUUID();
 
-  // ✅ 5. TOKEN PAYLOAD
+  // =========================
+  // JWT PAYLOAD
+  // =========================
   const payload = {
     sub: user.id,
     email: user.email,
     role: user.role,
-    sessionId, // VERY IMPORTANT
+    sessionId,
   };
 
-  // ✅ 6. GENERATE TOKENS
-  const accessToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '1d',
-  });
+  // =========================
+  // TOKENS
+  // =========================
+  const accessToken =
+    await this.jwtService.signAsync(payload, {
+      expiresIn: '1d',
+    });
 
-  const refreshToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '30d',
-  });
+  const refreshToken =
+    await this.jwtService.signAsync(payload, {
+      expiresIn: '30d',
+    });
 
-  const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+  // =========================
+  // HASH REFRESH TOKEN
+  // =========================
+  const hashedRefreshToken =
+    await bcrypt.hash(refreshToken, 10);
 
-  // ✅ 7. BACKGROUND TASKS (NON-BLOCKING)
-  Promise.all([
+  // =========================
+  // DATABASE OPERATIONS
+  // =========================
+  try {
     // login log
-    this.prisma.loginLog.create({
-      data: { email, ip, userAgent, status: 'SUCCESS' },
-    }),
-
-    // 🔥 IMPORTANT: reset previous current session
-    this.prisma.session.updateMany({
-      where: { userId: user.id, isCurrent: true },
-      data: { isCurrent: false },
-    }),
-
-    // ✅ CREATE NEW SESSION
-    this.prisma.session.create({
+    await this.prisma.loginLog.create({
       data: {
-        id: sessionId, // 🔥 LINK TO JWT
+        email,
+        ip,
+        userAgent,
+        status: 'SUCCESS',
+      },
+    });
+
+    // reset previous sessions
+    await this.prisma.session.updateMany({
+      where: {
+        userId: user.id,
+        isCurrent: true,
+      },
+      data: {
+        isCurrent: false,
+      },
+    });
+
+    // create new session
+    await this.prisma.session.create({
+      data: {
+        id: sessionId,
         userId: user.id,
         device: userAgent,
         ipAddress: ip,
@@ -153,75 +216,119 @@ async login(loginDto: LoginDto, req: any) {
         refreshToken: hashedRefreshToken,
         isCurrent: true,
       },
-    }),
+    });
 
-    // email alert
-    this.mailService.sendLoginAlert(user.email, {
-      ip,
-      device: userAgent,
-      name: user.firstName || 'User',
-    }),
-  ]).catch((err) => {
-    console.error('🔴 Background Task Error:', err.message);
+  } catch (err: any) {
+    console.error(
+      'LOGIN SESSION ERROR:',
+      err.message,
+    );
+
+    throw new InternalServerErrorException(
+      'Failed to initialize session',
+    );
+  }
+
+  // =========================
+  // BACKGROUND EMAIL
+  // =========================
+  this.mailService.sendLoginAlert(user.email, {
+    ip,
+    device: userAgent,
+    name: user.firstName || 'User',
+  }).catch((err) => {
+    console.error(
+      'MAIL SERVICE ERROR:',
+      err.message,
+    );
   });
 
-  // ✅ 8. RETURN RESPONSE
+  // =========================
+  // RESPONSE
+  // =========================
   return {
-access_token: accessToken,
+    access_token: accessToken,
 
-  refresh_token: refreshToken,
+    refresh_token: refreshToken,
 
-  session_id: sessionId,
+    session_id: sessionId,
+
     user: {
       id: user.id,
       email: user.email,
       role: user.role,
+
       firstName: user.firstName,
       lastName: user.lastName,
+
       vendorId: user.vendor?.id || null,
-      isVerified: user.vendor?.isVerified || false,
-      kycStatus: user.vendor?.kycStatus || 'NOT_SUBMITTED',
+
+      isVerified:
+        user.vendor?.isVerified || false,
+
+      kycStatus:
+        user.vendor?.kycStatus ||
+        'NOT_SUBMITTED',
     },
   };
 }
-private extractClientIp(req: any): string {
-  const forwardedFor = req.headers?.['x-forwarded-for'];
 
-  if (typeof forwardedFor === 'string') {
-    return forwardedFor.split(',')[0].trim();
-  }
 
-  return (
-    req.ip ||
-    req.connection?.remoteAddress ||
-    req.raw?.ip ||
-    '0.0.0.0'
-  );
-}
-
-async refresh(sessionId: string, refreshToken: string) {
-  const session = await this.prisma.session.findUnique({
-    where: { id: sessionId },
-  });
+// ====================================
+// REFRESH TOKEN
+// ====================================
+async refresh(
+  sessionId: string,
+  refreshToken: string,
+) {
+  // =========================
+  // FIND SESSION
+  // =========================
+  const session =
+    await this.prisma.session.findUnique({
+      where: {
+        id: sessionId,
+      },
+    });
 
   if (!session) {
-    throw new UnauthorizedException('Session not found');
+    throw new UnauthorizedException(
+      'Session not found',
+    );
   }
 
-  const isMatch = await bcrypt.compare(refreshToken, session.refreshToken);
+  // =========================
+  // VERIFY REFRESH TOKEN
+  // =========================
+  const isMatch = await bcrypt.compare(
+    refreshToken,
+    session.refreshToken,
+  );
 
   if (!isMatch) {
-    throw new UnauthorizedException('Invalid refresh token');
+    throw new UnauthorizedException(
+      'Invalid refresh token',
+    );
   }
 
+  // =========================
+  // FIND USER
+  // =========================
   const user = await this.prisma.user.findUnique({
-    where: { id: session.userId },
+    where: {
+      id: session.userId,
+    },
   });
 
   if (!user) {
-    throw new UnauthorizedException();
+    throw new UnauthorizedException(
+      'User not found',
+    );
   }
 
+  // =========================
+  // NEW PAYLOAD
+  // =========================
   const payload = {
     sub: user.id,
     email: user.email,
@@ -229,25 +336,52 @@ async refresh(sessionId: string, refreshToken: string) {
     sessionId: session.id,
   };
 
-  // rotate token (VERY IMPORTANT)
-  const newRefreshToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '7d',
-  });
+  // =========================
+  // GENERATE NEW TOKENS
+  // =========================
+  const newAccessToken =
+    await this.jwtService.signAsync(payload, {
+      expiresIn: '1d',
+    });
 
-  const hashed = await bcrypt.hash(newRefreshToken, 10);
+  const newRefreshToken =
+    await this.jwtService.signAsync(payload, {
+      expiresIn: '30d',
+    });
 
-  await this.prisma.session.update({
-    where: { id: session.id },
-    data: {
-      refreshToken: hashed,
-      lastUsed: new Date(),
-    },
-  });
+  // =========================
+  // HASH NEW REFRESH TOKEN
+  // =========================
+  const hashedRefreshToken =
+    await bcrypt.hash(newRefreshToken, 10);
 
-  const newAccessToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '1d',
-  });
+  // =========================
+  // UPDATE SESSION
+  // =========================
+  try {
+    await this.prisma.session.update({
+      where: {
+        id: session.id,
+      },
+      data: {
+        refreshToken: hashedRefreshToken,
+        lastUsed: new Date(),
+      },
+    });
+  } catch (err: any) {
+    console.error(
+      'REFRESH SESSION ERROR:',
+      err.message,
+    );
 
+    throw new InternalServerErrorException(
+      'Failed to refresh session',
+    );
+  }
+
+  // =========================
+  // RESPONSE
+  // =========================
   return {
     access_token: newAccessToken,
     refresh_token: newRefreshToken,
