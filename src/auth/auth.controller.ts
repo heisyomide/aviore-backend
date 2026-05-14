@@ -8,6 +8,9 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+// Replace your current express import with this:
+import * as express from 'express';
+import { GetCookies } from '../common/decorators/get-cookies.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -83,58 +86,40 @@ async login(
 
 
 @Post('refresh')
+@HttpCode(HttpStatus.OK) // POST defaults to 201; refresh should be 200
 async refresh(
-  @Req() req: any,
-  @Res() res: any,
+  @GetCookies('refresh_token') refreshToken: string,
+  @GetCookies('session_id') sessionId: string,
+  @Res({ passthrough: true }) res: express.Response,
 ) {
-  const refreshToken =
-    req.cookies?.['refresh_token'];
-
-  const sessionId =
-    req.cookies?.['session_id'];
-
+  // 1. Validation logic
   if (!refreshToken || !sessionId) {
-    throw new UnauthorizedException(
-      'Missing required refresh credentials',
-    );
+    throw new UnauthorizedException('Missing required refresh credentials');
   }
 
-  const result = await this.authService.refresh(
-    sessionId,
-    refreshToken,
-  );
+  // 2. Service call for rotation
+  const result = await this.authService.refresh(sessionId, refreshToken);
 
-  const isProd =
-    process.env.NODE_ENV === 'production';
+  // 3. Centralized Cookie Options
+  const isProd = process.env.NODE_ENV === 'production';
+  const cookieOptions: express.CookieOptions = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    path: '/', // Crucial: makes cookie available to all routes
+  };
 
-  // 🔥 ROTATE REFRESH TOKEN COOKIE
-  res.cookie(
-    'refresh_token',
-    result.refresh_token,
-    {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    },
-  );
+  // 4. Set the cookies
+  res.cookie('refresh_token', result.refresh_token, cookieOptions);
+  res.cookie('session_id', sessionId, cookieOptions);
 
-  // session_id remains same
-  res.cookie(
-    'session_id',
-    sessionId,
-    {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    },
-  );
-
-  return res.json({
+  // 5. Clean Return (NestJS handles the JSON conversion)
+  return {
     access_token: result.access_token,
-  });
+  };
 }
+
 
 @UseGuards(JwtAuthGuard)
 @Post('logout')
