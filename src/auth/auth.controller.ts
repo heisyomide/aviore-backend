@@ -40,41 +40,31 @@ export class AuthController {
 async login(
   @Body() dto: LoginDto,
   @Req() req: any,
-  @Res() res: any,
+  @Res({ passthrough: true }) res: express.Response, // 👈 ADD passthrough: true
 ) {
-  // 1. AUTH SERVICE
   const result = await this.authService.login(dto, req);
-
-  // 2. ENV CHECK
   const isProd = process.env.NODE_ENV === 'production';
 
-  // 3. REFRESH TOKEN COOKIE
-  res.cookie('refresh_token', result.refresh_token, {
+  const cookieOptions: express.CookieOptions = {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? 'none' : 'lax',
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    maxAge: 1000 * 60 * 60 * 24 * 7,
     path: '/',
-  });
+  };
 
-  // 4. SESSION ID COOKIE
-  res.cookie('session_id', result.session_id, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'none' : 'lax',
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-    path: '/',
-  });
+  // Set cookies
+  res.cookie('refresh_token', result.refresh_token, cookieOptions);
+  res.cookie('session_id', result.session_id, cookieOptions);
 
-  // 5. RESPONSE
-  return res.status(HttpStatus.OK).json({
+  // 🚀 IMPORTANT: Just return the object. 
+  // Do NOT use res.status().json() when passthrough is true.
+  return {
     success: true,
     message: 'Login successful',
-
     access_token: result.access_token,
-
     user: result.user,
-  });
+  };
 }
   // --- PROFILE ---
   @UseGuards(JwtAuthGuard)
