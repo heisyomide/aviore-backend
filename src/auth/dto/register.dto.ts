@@ -8,18 +8,18 @@ export enum UserRole {
 export class RegisterDto {
   @IsString()
   @IsNotEmpty({ message: 'First name is required' })
-  firstName: string;
+  firstName!: string;
 
   @IsString()
   @IsNotEmpty({ message: 'Last name is required' })
-  lastName: string;
+  lastName!: string;
 
   @IsEmail({}, { message: 'Please provide a valid email address' })
-  email: string;
+  email!: string;
 
   @IsString()
   @MinLength(6, { message: 'Password must be at least 6 characters long' })
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsEnum(UserRole, { 

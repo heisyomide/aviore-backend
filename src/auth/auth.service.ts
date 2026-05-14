@@ -6,6 +6,7 @@ import { RegisterDto, UserRole } from './dto/register.dto'; // Ensure you have t
 import * as bcrypt from 'bcrypt';
 import { UsersService } from 'src/users/users.service';
 import { MailService } from 'src/mail/mail.service';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -119,11 +120,11 @@ async login(loginDto: LoginDto, req: any) {
 
   // ✅ 6. GENERATE TOKENS
   const accessToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '15m',
+    expiresIn: '1d',
   });
 
   const refreshToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '7d',
+    expiresIn: '30d',
   });
 
   const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
@@ -166,8 +167,11 @@ async login(loginDto: LoginDto, req: any) {
 
   // ✅ 8. RETURN RESPONSE
   return {
-    access_token: accessToken,
-    refresh_token: refreshToken,
+access_token: accessToken,
+
+  refresh_token: refreshToken,
+
+  session_id: sessionId,
     user: {
       id: user.id,
       email: user.email,
@@ -241,7 +245,7 @@ async refresh(sessionId: string, refreshToken: string) {
   });
 
   const newAccessToken = await this.jwtService.signAsync(payload, {
-    expiresIn: '15m',
+    expiresIn: '1d',
   });
 
   return {

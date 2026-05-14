@@ -33,17 +33,43 @@ export class AuthController {
   // --- LOGIN ---
 
 @Post('login')
-async login(@Body() dto: LoginDto, @Req() req: any, @Res() res: any) {
+@HttpCode(HttpStatus.OK)
+async login(
+  @Body() dto: LoginDto,
+  @Req() req: any,
+  @Res() res: any,
+) {
+  // 1. AUTH SERVICE
   const result = await this.authService.login(dto, req);
 
+  // 2. ENV CHECK
+  const isProd = process.env.NODE_ENV === 'production';
+
+  // 3. REFRESH TOKEN COOKIE
   res.cookie('refresh_token', result.refresh_token, {
     httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    path: '/',
   });
 
-  return res.json({
+  // 4. SESSION ID COOKIE
+  res.cookie('session_id', result.session_id, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    path: '/',
+  });
+
+  // 5. RESPONSE
+  return res.status(HttpStatus.OK).json({
+    success: true,
+    message: 'Login successful',
+
     access_token: result.access_token,
+
     user: result.user,
   });
 }
@@ -55,9 +81,9 @@ async login(@Body() dto: LoginDto, @Req() req: any, @Res() res: any) {
     return req.user;
   }
 
+
 @Post('refresh')
-@Post('refresh')
-async refresh(@Req() req: any) {
+async refresh(@Req() req: any, @Res() res: any) {
   const refreshToken = req.cookies?.['refresh_token'];
   const sessionId = req.cookies?.['session_id']; // Ensure you are setting this cookie on login
 
