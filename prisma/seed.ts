@@ -14,46 +14,138 @@ const prisma = new PrismaClient({ adapter });
 // --- COMPLETE CATEGORY DATA ---
 const categoriesData = [
   {
-    name: 'Electronics',
-    children: [
-      { name: 'Mobile & Accessories', children: ['Smartphones', 'Feature Phones', 'Phone Cases', 'Screen Protectors', 'Chargers & Cables', 'Power Banks', 'Smartwatches', 'Earbuds & Headphones'] },
-      { name: 'Computers', children: ['Laptops', 'Desktops', 'Monitors', 'Keyboards & Mouse', 'Storage Devices', 'Computer Accessories'] },
-      { name: 'TV & Home Entertainment', children: ['Smart TVs', 'Projectors', 'Soundbars', 'Home Theater Systems', 'Streaming Devices'] },
-      { name: 'Gaming', children: ['Consoles', 'Game Controllers', 'Video Games', 'Gaming Accessories'] },
-    ],
-  },
-  {
     name: 'Fashion',
     children: [
-      { name: 'Men', children: ['T-Shirts', 'Shirts', 'Jeans', 'Trousers', 'Suits', 'Footwear', 'Watches', 'Sunglasses', 'Caps'] },
-      { name: 'Women', children: ['Dresses', 'Tops', 'Skirts', 'Jeans', 'Handbags', 'Heels', 'Jewelry', 'Caps'] },
-      { name: 'Kids & Baby', children: ['Boys Clothing', 'Girls Clothing', 'Baby Essentials', 'School Shoes'] },
+      {
+        name: 'Women Fashion',
+        children: [
+          'Dresses',
+          'Tops',
+          'Jeans',
+          'Skirts',
+          'Two Piece Sets',
+          'Lingerie',
+          'Abayas',
+          'Jumpsuits',
+        ],
+      },
+
+      {
+        name: 'Men Fashion',
+        children: [
+          'Shirts',
+          'T-Shirts',
+          'Jeans',
+          'Native Wear',
+          'Trousers',
+          'Suits',
+          'Shorts',
+        ],
+      },
+
+      {
+        name: 'Footwear',
+        children: [
+          'Sneakers',
+          'Heels',
+          'Slides',
+          'Sandals',
+          'Boots',
+        ],
+      },
+
+      {
+        name: 'Bags',
+        children: [
+          'Handbags',
+          'Crossbody Bags',
+          'Backpacks',
+          'Wallets',
+        ],
+      },
+
+      {
+        name: 'Watches & Jewelry',
+        children: [
+          'Watches',
+          'Necklaces',
+          'Bracelets',
+          'Rings',
+          'Earrings',
+        ],
+      },
+
+      {
+        name: 'Wigs & Hair',
+        children: [
+          'Human Hair',
+          'Bone Straight',
+          'Curly Wigs',
+          'Frontal Wigs',
+          'Closures',
+          'Hair Bundles',
+        ],
+      },
     ],
   },
+
   {
-    name: 'Home & Living',
+    name: 'Beauty & Skincare',
     children: [
-      { name: 'Furniture', children: ['Sofas', 'Beds', 'Wardrobes', 'Office Chairs', 'Tables'] },
-      { name: 'Home Decor', children: ['Wall Art', 'Mirrors', 'Lighting', 'Curtains', 'Rugs'] },
-      { name: 'Kitchen & Dining', children: ['Cookware', 'Utensils', 'Plates & Cups', 'Storage Containers'] },
-      { name: 'Home Appliances', children: ['Refrigerators', 'Washing Machines', 'Microwaves', 'Blenders', 'Irons'] },
+      {
+        name: 'Skincare',
+        children: [
+          'Face Creams',
+          'Body Creams',
+          'Face Wash',
+          'Serums',
+          'Sunscreen',
+          'Soaps',
+        ],
+      },
+
+      {
+        name: 'Makeup',
+        children: [
+          'Lipsticks',
+          'Powders',
+          'Foundations',
+          'Lashes',
+          'Beauty Tools',
+        ],
+      },
+
+      {
+        name: 'Fragrances',
+        children: [
+          'Perfumes',
+          'Body Sprays',
+          'Oils',
+        ],
+      },
+
+      {
+        name: 'Haircare',
+        children: [
+          'Shampoo',
+          'Conditioners',
+          'Hair Oils',
+          'Hair Treatment',
+        ],
+      },
     ],
   },
-  { name: 'Groceries & Food', children: ['Beverages', 'Snacks', 'Rice & Grains', 'Oils', 'Canned Foods', 'Spices', 'Frozen Foods'] },
-  { name: 'Beauty & Personal Care', children: ['Skincare', 'Haircare', 'Makeup', 'Fragrances', 'Grooming Kits', 'Shaving Products'] },
-  { name: 'Health & Fitness', children: ['Supplements', 'Gym Equipment', 'Fitness Accessories', 'Medical Supplies', 'First Aid'] },
-  { name: 'Automobile', children: ['Car Accessories', 'Car Parts', 'Motorcycles', 'Tires', 'Car Electronics'] },
-  { name: 'Tools & Industrial', children: ['Power Tools', 'Hand Tools', 'Safety Equipment', 'Construction Materials'] },
-  { name: 'Books & Media', children: ['Books', 'E-books', 'Stationery', 'Educational Materials'] },
-  { name: 'Pets', children: ['Pet Food', 'Pet Toys', 'Pet Grooming', 'Pet Accessories'] },
-  { name: 'Arts & Crafts', children: ['Painting Supplies', 'DIY Materials', 'Craft Tools'] },
-  { name: 'Events & Party Supplies', children: ['Decorations', 'Balloons', 'Gift Items', 'Party Favors'] },
-  { name: 'Business & Office', children: ['Office Supplies', 'Office Furniture', 'POS Machines', 'Packaging Materials'] },
-  { name: 'Digital Products', children: ['E-books', 'Design Templates', 'Software', 'Online Courses'] },
-  { name: 'Real Estate', children: ['Land', 'Houses for Sale', 'Rentals', 'Commercial Property'] },
-  { name: 'Services', children: ['Home Cleaning', 'Repair Services', 'Photography', 'Event Planning', 'Freelance Services'] },
-  { name: 'Luxury & Premium', children: ['Designer Fashion', 'High-end Watches', 'Premium Electronics'] },
-  { name: 'Clearance & Deals', children: ['Flash Sales', 'Discounted Items', 'Bundles'] },
+
+  {
+    name: 'Accessories',
+    children: [
+      'Sunglasses',
+      'Caps',
+      'Belts',
+      'Phone Accessories',
+      'Fashion Accessories',
+    ],
+  },
 ];
 
 /**
@@ -116,7 +208,7 @@ async function main() {
     const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
-          email: 'vendor@aviore.com',
+          email: 'ayomide.com',
           password: hashedPassword,
           role: 'VENDOR',
           firstName: 'Avicore',
