@@ -395,4 +395,29 @@ async logout(sessionId: string) {
 
   return { message: 'Logged out successfully' };
 }
+private extractClientIp(req: any): string {
+
+    const forwardedFor = req.headers?.['x-forwarded-for'];
+
+    if (typeof forwardedFor === 'string') {
+
+      return forwardedFor.split(',')[0].trim();
+
+    }
+
+    return (
+
+      req.ip ||
+
+      req.connection?.remoteAddress ||
+
+      req.socket?.remoteAddress ||
+
+      '0.0.0.0'
+
+    );
+
+  }
+
 }
+
