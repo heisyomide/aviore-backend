@@ -83,16 +83,57 @@ async login(
 
 
 @Post('refresh')
-async refresh(@Req() req: any, @Res() res: any) {
-  const refreshToken = req.cookies?.['refresh_token'];
-  const sessionId = req.cookies?.['session_id']; // Ensure you are setting this cookie on login
+async refresh(
+  @Req() req: any,
+  @Res() res: any,
+) {
+  const refreshToken =
+    req.cookies?.['refresh_token'];
+
+  const sessionId =
+    req.cookies?.['session_id'];
 
   if (!refreshToken || !sessionId) {
-    throw new UnauthorizedException('Missing required refresh credentials');
+    throw new UnauthorizedException(
+      'Missing required refresh credentials',
+    );
   }
 
-  // Pass both arguments as defined in auth.service.ts
-  return this.authService.refresh(sessionId, refreshToken);
+  const result = await this.authService.refresh(
+    sessionId,
+    refreshToken,
+  );
+
+  const isProd =
+    process.env.NODE_ENV === 'production';
+
+  // 🔥 ROTATE REFRESH TOKEN COOKIE
+  res.cookie(
+    'refresh_token',
+    result.refresh_token,
+    {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+    },
+  );
+
+  // session_id remains same
+  res.cookie(
+    'session_id',
+    sessionId,
+    {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+    },
+  );
+
+  return res.json({
+    access_token: result.access_token,
+  });
 }
 
 @UseGuards(JwtAuthGuard)
