@@ -60,8 +60,28 @@ async getCampaigns() {
     return this.storefrontService.getVendorStorefront(identifier);
   }
 
+@Get('category/:parentSlug/:groupSlug')
+  async getSubcategoryWorld(
+    @Param('parentSlug') parentSlug: string,
+    @Param('groupSlug') groupSlug: string,
+  ) {
+    // 🧼 SANITATION: If the frontend sends "fashion-women-fashion", strip "fashion-" out
+    const cleanGroupSlug = groupSlug.startsWith(`${parentSlug}-`)
+      ? groupSlug.replace(`${parentSlug}-`, '')
+      : groupSlug;
 
-  @Get('category/:slug')
+    return await this.storefrontService.getSubcategoryWorldData(parentSlug, cleanGroupSlug);
+  }
+
+  // 2️⃣ DEDICATED FULL REALM BUILDER PAGE
+  // This handles: GET /api/storefront/category/fashion
+  @Get('category/:parentSlug')
+  async getCategoryWorld(@Param('parentSlug') parentSlug: string) {
+    return await this.storefrontService.getCategoryWorldData(parentSlug);
+  }
+
+  // 3️⃣ COMPONENT STRIP FALLBACK (Moved to the bottom so it never hijacks the parent realm query)
+  @Get('category-strip/:slug') // 🎯 Tip: Changed path slightly to keep it unique and avoid collisions
   async getCategorySection(@Param('slug') slug: string) {
     const products = await this.storefrontService.getCategoryStrip(slug);
     return {
@@ -69,4 +89,5 @@ async getCampaigns() {
       products
     };
   }
+
 }

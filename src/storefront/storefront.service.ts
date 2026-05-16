@@ -370,5 +370,82 @@ async getBestSellers(limit: number = 10) {
     });
   }
 
+async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
 
+  const exactDbSlug = `${parentSlug}-${groupSlug}`;
+    // 1. Target the exact active group (e.g., "women-fashion") ensuring it belongs to the parent category
+    const currentGroup = await this.prisma.category.findFirst({
+      where: {
+        slug: exactDbSlug,
+        parent: {
+          slug: parentSlug,
+        },
+      },
+      include: {
+        // 2. Pull the microcategories under this group (e.g., "Dresses", "Tops", "Jeans")
+        children: {
+          include: {
+            // 3. Populate each microcategory directly with its actual live database products
+            products: {
+              orderBy: { createdAt: 'desc' },
+              take: 8, // Grabs a clean grid payload
+              select: {
+                id: true,
+                title: true,
+                price: true,
+                images: true, // Make sure your Product model matches this field name exactly
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!currentGroup) {
+      throw new NotFoundException(`Ecosystem branch matching /${parentSlug}/${groupSlug} could not be synchronized.`);
+    }
+
+    return currentGroup;
+  }
+async getCategoryWorldData(parentSlug: string) {
+  const category = await this.prisma.category.findUnique({
+    where: { slug: parentSlug },
+    include: {
+      children: { // e.g., Men Fashion, Women Fashion
+        include: {
+          products: {
+            orderBy: { createdAt: 'desc' },
+            take: 6, // Matches the 6 items expected by your top-level grid view
+            select: {
+              id: true,
+              title: true, // Swapped to title to align with your Prisma schema definitions
+              price: true,
+              images: true,
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!category) {
+    throw new NotFoundException(`Category Ecosystem Realm matching /${parentSlug} not found.`);
+  }
+
+  // Format title to name transformation map if required for your global ProductGrid
+  const formattedChildren = category.children.map((group) => ({
+    ...group,
+    products: group.products.map((p) => ({
+      id: p.id,
+      name: p.title, 
+      price: p.price,
+      images: p.images,
+    })),
+  }));
+
+  return {
+    ...category,
+    children: formattedChildren,
+  };
+}
 }
