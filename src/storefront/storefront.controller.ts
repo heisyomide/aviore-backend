@@ -1,6 +1,7 @@
 // src/storefront/storefront.controller.ts
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Query } from '@nestjs/common';
 import { StorefrontService } from './storefront.service';
+import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 
 @Controller('storefront')
 export class StorefrontController {
@@ -88,6 +89,11 @@ async getCampaigns() {
       category: slug.toUpperCase(),
       products
     };
+  }
+@Get('products')
+  @HttpCode(HttpStatus.OK)
+  async getDiscoveryFeed(@Query() query: StorefrontProductsQueryDto) {
+    return this.storefrontService.getDiscoveryProducts(query);
   }
 
 }

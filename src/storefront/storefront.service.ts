@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { ProductStatus, VendorStatus, Prisma } from '@prisma/client';
+import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 
 @Injectable()
 export class StorefrontService {
@@ -640,4 +641,90 @@ async getCategoryWorldData(parentSlug: string) {
   };
 
 }
+
+async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
+    const { sort, category, maxPrice, origin, maxDeliveryDays, limit } = query;
+
+    // 1. Enforce correct Enum Status type
+    const whereClause: any = {
+      status: ProductStatus.APPROVED,
+    };
+
+    // 2. Handle Category Exploration
+    if (category) {
+      whereClause.category = {
+        slug: category,
+      };
+    }
+
+    // 3. Handle Price Caps
+    if (maxPrice) {
+      whereClause.price = {
+        lte: parseFloat(maxPrice),
+      };
+    }
+
+    // 4. Handle Logistics Origin
+    if (origin) {
+      whereClause.origin = origin;
+    }
+
+    // 5. 🚚 FIX: Map 'maxDeliveryDays' cleanly to your database field 'deliveryMax'
+    if (maxDeliveryDays) {
+      whereClause.deliveryMax = {
+        lte: parseInt(maxDeliveryDays),
+      };
+    }
+
+    // 6. 📈 FIX: Pivot the dynamic trending engine to utilize ratings and interaction counts
+    let orderByClause: any = { createdAt: 'desc' };
+
+    if (sort === 'trending') {
+      orderByClause = [
+        { reviewCount: 'desc' },   // Sorts by total engagement activity
+        { averageRating: 'desc' }, // Cross-references item satisfaction
+      ];
+    } else if (sort === 'newest') {
+      orderByClause = { createdAt: 'desc' };
+    }
+
+    // 7. Fire optimized query execution
+    const takeLimit = limit ? parseInt(limit) : 8;
+    
+    const products = await this.prisma.product.findMany({
+      where: whereClause,
+      orderBy: orderByClause,
+      take: takeLimit,
+      // ... inside your prisma.product.findMany include block:
+
+                include: {
+
+                  images: true,
+
+                  variants: {
+
+                    include: {
+
+                      images: true,
+
+                    },
+
+                  },
+
+                  vendor: true,
+
+                  category: true,
+
+                },
+    
+
+    });
+
+    return {
+      success: true,
+      count: products.length,
+      products,
+    };
+  }
+
 }
