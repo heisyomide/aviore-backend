@@ -454,44 +454,190 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
   };
 }
 async getCategoryWorldData(parentSlug: string) {
+
   const category = await this.prisma.category.findUnique({
-    where: { slug: parentSlug },
+
+    where: {
+
+      slug: parentSlug,
+
+    },
+
     include: {
-      children: { // e.g., Men Fashion, Women Fashion
+
+      children: {
+
+        // e.g Skincare / Haircare / Makeup
+
         include: {
-          products: {
-            orderBy: { createdAt: 'desc' },
-            take: 6, // Matches the 6 items expected by your top-level grid view
-            select: {
-              id: true,
-              title: true, // Swapped to title to align with your Prisma schema definitions
-              price: true,
-              images: true,
-            }
-          }
-        }
-      }
-    }
+
+          children: {
+
+            // e.g Face Cream / Body Cream / Serums
+
+            include: {
+
+              products: {
+
+                where: {
+
+                  isDeleted: false,
+
+                  isActive: true,
+
+                  status: 'APPROVED',
+
+                },
+
+                take: 20,
+
+                orderBy: {
+
+                  createdAt: 'desc',
+
+                },
+
+                include: {
+
+                  images: true,
+
+                  variants: {
+
+                    include: {
+
+                      images: true,
+
+                    },
+
+                  },
+
+                  vendor: true,
+
+                  category: true,
+
+                },
+
+              },
+
+            },
+
+          },
+
+        },
+
+      },
+
+    },
+
   });
 
   if (!category) {
-    throw new NotFoundException(`Category Ecosystem Realm matching /${parentSlug} not found.`);
+
+    throw new NotFoundException(
+
+      `Category ${parentSlug} not found.`,
+
+    );
+
   }
 
-  // Format title to name transformation map if required for your global ProductGrid
-  const formattedChildren = category.children.map((group) => ({
-    ...group,
-    products: group.products.map((p) => ({
-      id: p.id,
-      name: p.title, 
-      price: p.price,
-      images: p.images,
-    })),
-  }));
+  const formattedChildren = category.children.map((group) => {
+
+    // collect ALL products from all subcategories
+
+    const allProducts =
+
+      group.children.flatMap((sub) => sub.products);
+
+    // shuffle randomly
+
+    const shuffled = allProducts.sort(
+
+      () => 0.5 - Math.random()
+
+    );
+
+    // take only preview amount
+
+    const selectedProducts = shuffled.slice(0, 8);
+
+    const normalizedProducts = selectedProducts.map((p) => {
+
+      const variantPrices =
+
+        p.variants
+
+          ?.map((v) => Number(v.price) || 0)
+
+          .filter(Boolean) || [];
+
+      const displayPrice =
+
+        variantPrices.length > 0
+
+          ? Math.min(...variantPrices)
+
+          : Number(p.price) || 0;
+
+      const totalStock =
+
+        p.variants?.length > 0
+
+          ? p.variants.reduce(
+
+              (sum, v) =>
+
+                sum + (Number(v.stock) || 0),
+
+              0
+
+            )
+
+          : Number(p.stock) || 0;
+
+      return {
+
+        ...p,
+
+        // CRITICAL FIX
+
+        price: displayPrice,
+
+        stock: totalStock,
+
+        displayPrice,
+
+        totalStock,
+
+      };
+
+    });
+
+    return {
+
+      id: group.id,
+
+      name: group.name,
+
+      slug: group.slug,
+
+      products: normalizedProducts,
+
+    };
+
+  });
 
   return {
-    ...category,
+
+    id: category.id,
+
+    name: category.name,
+
+    slug: category.slug,
+
     children: formattedChildren,
+
   };
+
 }
 }
