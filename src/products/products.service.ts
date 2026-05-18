@@ -289,7 +289,7 @@ async update(id: string, dto: UpdateProductDto, userId: string) {
 
 return this.normalizeImages(updated);
   }, {
-    timeout: 15000, // 👈 Fixes the P2028 "Expired Transaction" error
+    timeout: 20000, // 👈 Fixes the P2028 "Expired Transaction" error
   });
 }
 
