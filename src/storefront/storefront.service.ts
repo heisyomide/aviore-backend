@@ -643,93 +643,88 @@ async getCategoryWorldData(parentSlug: string) {
 }
 
 async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
-  const { sort, category, maxPrice, origin, maxDeliveryDays, limit, isFlashDeal } = query;
+    const { sort, category, maxPrice, origin, maxDeliveryDays, limit } = query;
 
-  // 1. Enforce correct Enum Status type
-  const whereClause: any = {
-    status: ProductStatus.APPROVED,
-  };
+    // 1. Enforce correct Enum Status type
+    const whereClause: any = {
+      status: ProductStatus.APPROVED,
+    };
 
-  // 2. Handle Category Exploration
-  if (category) {
-    whereClause.category = { slug: category };
-  }
+    // 2. Handle Category Exploration
+    if (category) {
+      whereClause.category = {
+        slug: category,
+      };
+    }
 
-  // 3. Handle Price Caps
-  if (maxPrice) {
-    whereClause.price = { lte: parseFloat(maxPrice) };
-  }
+    // 3. Handle Price Caps
+    if (maxPrice) {
+      whereClause.price = {
+        lte: parseFloat(maxPrice),
+      };
+    }
 
-  // 4. Handle Logistics Origin
-  if (origin) {
-    whereClause.origin = origin;
-  }
+    // 4. Handle Logistics Origin
+    if (origin) {
+      whereClause.origin = origin;
+    }
 
-  // 5. Map 'maxDeliveryDays' cleanly to database field 'deliveryMax'
-  if (maxDeliveryDays) {
-    whereClause.deliveryMax = { lte: parseInt(maxDeliveryDays) };
-  }
+    // 5. 🚚 FIX: Map 'maxDeliveryDays' cleanly to your database field 'deliveryMax'
+    if (maxDeliveryDays) {
+      whereClause.deliveryMax = {
+        lte: parseInt(maxDeliveryDays),
+      };
+    }
 
-  // 🚀 5.5: FLASH DEAL PROTOCOL (Type-Safe Isolation)
-  const checkingFlash = isFlashDeal === 'true' || isFlashDeal === true;
-  if (checkingFlash) {
-    whereClause.oldPrice = {
-      not: null,
-      gt: 0, // Targets products with an explicit markdown baseline
+    // 6. 📈 FIX: Pivot the dynamic trending engine to utilize ratings and interaction counts
+    let orderByClause: any = { createdAt: 'desc' };
+
+    if (sort === 'trending') {
+      orderByClause = [
+        { reviewCount: 'desc' },   // Sorts by total engagement activity
+        { averageRating: 'desc' }, // Cross-references item satisfaction
+      ];
+    } else if (sort === 'newest') {
+      orderByClause = { createdAt: 'desc' };
+    }
+
+    // 7. Fire optimized query execution
+    const takeLimit = limit ? parseInt(limit) : 8;
+    
+    const products = await this.prisma.product.findMany({
+      where: whereClause,
+      orderBy: orderByClause,
+      take: takeLimit,
+      // ... inside your prisma.product.findMany include block:
+
+                include: {
+
+                  images: true,
+
+                  variants: {
+
+                    include: {
+
+                      images: true,
+
+                    },
+
+                  },
+
+                  vendor: true,
+
+                  category: true,
+
+                },
+    
+
+    });
+
+    return {
+      success: true,
+      count: products.length,
+      products,
     };
   }
 
-  // 6. Pivot sorting engine
-  let orderByClause: any = { createdAt: 'desc' };
-
-  if (sort === 'trending') {
-    orderByClause = [
-      { reviewCount: 'desc' },
-      { averageRating: 'desc' },
-    ];
-  } else if (sort === 'newest') {
-    orderByClause = { createdAt: 'desc' };
-  } else if (checkingFlash) {
-    orderByClause = { createdAt: 'desc' };
-  }
-
-  // If filtering on the fly, fetch slightly more rows to account for mathematical filtering anomalies
-  const takeLimit = limit ? parseInt(limit) : 8;
-  const fetchLimit = checkingFlash ? takeLimit * 2 : takeLimit;
-  
-  // 7. Fire database execution
-  let products = await this.prisma.product.findMany({
-    where: whereClause,
-    orderBy: orderByClause,
-    take: fetchLimit,
-    include: {
-      images: true,
-      variants: {
-        include: {
-          images: true,
-        },
-      },
-      vendor: true,
-      category: true,
-    },
-  });
-
-  // 🚀 7.5: IN-MEMORY MATH FILTER
-  // Resolves the Decimal vs Float problem safely in Node runtime
-  if (checkingFlash) {
-    products = products
-      .filter((product) => {
-        const currentPrice = Number(product.price);
-        const originalPrice = Number(product.oldPrice);
-        return currentPrice < originalPrice; // Confirms it's a true markdown
-      })
-      .slice(0, takeLimit); // Trims back down to requested size
-  }
-
-  return {
-    success: true,
-    count: products.length,
-    products,
-  };
-}
 }
