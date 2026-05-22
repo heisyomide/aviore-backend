@@ -31,6 +31,8 @@ import { CartModule } from './cart/cart.module';
 import { PayoutModule } from './payout/payout.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { BannerModule } from './admin/banner/banner.module';
+import { ReferralModule } from './referral/referral.module';
+import { VoucherModule } from './voucher/voucher.module';
 
 @Global()
 @Module({
@@ -144,6 +146,8 @@ CacheModule.registerAsync({
     PayoutModule,
     WishlistModule,
     BannerModule,
+    ReferralModule,
+    VoucherModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, InternalServerErrorException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma.service';
 import { LoginDto } from './dto/login.dto';
@@ -7,6 +7,7 @@ import * as bcrypt from 'bcrypt';
 import { UsersService } from 'src/users/users.service';
 import { MailService } from 'src/mail/mail.service';
 import * as crypto from 'crypto';
+import { ReferralService } from 'src/referral/referral.service';
 
 @Injectable()
 export class AuthService {
@@ -14,24 +15,70 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private usersService: UsersService,
-    private mailService: MailService
+    private mailService: MailService,
+    private readonly referralService: ReferralService
   ) {}
 
+
+async verifyUserEmailDirect(userId: string) {
+    // 1. Fetch the targeted registration account to ensure it exists
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('No user identity matched the requested execution parameters.');
+    }
+
+    if (user.isEmailVerified) {
+      return { success: true, message: 'Identity has already been authorized and activated.' };
+    }
+
+    // 2. Commit status changes directly onto the active User row entry
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { isEmailVerified: true },
+    });
+
+    // 3. BACKGROUND POST-PROCESS: Safely invoke growth validation algorithms out-of-band
+    this.referralService.processReferralQualification(userId).catch((err) => {
+      console.error('🔴 Background Referral Qualification Error:', err.message);
+    });
+
+    return { 
+      success: true, 
+      message: 'Email verified successfully. Growth acquisition tracks updated.' 
+    };
+  }
+
+
+
 async register(registerDto: RegisterDto) {
-  const { email, password, role, firstName, lastName, storeName } = registerDto;
+  const { 
+    email, 
+    password, 
+    role, 
+    firstName, 
+    lastName, 
+    storeName,
+    referredByCode,
+    ipAddress,
+    deviceFingerprint
+  } = registerDto;
 
   // 1. PRE-FLIGHT CHECK
-  // Do this before opening a transaction to save DB resources
   const existingUser = await this.prisma.user.findUnique({ where: { email } });
   if (existingUser) {
     throw new ConflictException('An account with this email already exists');
   }
 
   const hashedPassword = await bcrypt.hash(password, 12);
+  
+  // SECURE GROWTH VECTORS: Generate an unalterable code for the new account immediately
+  const generatedReferralCode = this.referralService.generateSecureReferralCode();
 
   try {
-    // 2. STRICTURED TRANSACTION
-    // Only put Database operations in here. No Email, No Logs, No External APIs.
+    // 2. STRUCTURED TRANSACTION
     const newUser = await this.prisma.$transaction(async (tx) => {
       return await tx.user.create({
         data: {
@@ -40,6 +87,12 @@ async register(registerDto: RegisterDto) {
           firstName,
           lastName,
           role: role || UserRole.CUSTOMER,
+          
+          // Inject permanent growth metadata fields
+          referralCode: generatedReferralCode,
+          signupIp: ipAddress || null,
+          deviceFingerprint: deviceFingerprint || null,
+
           ...(role === UserRole.VENDOR && {
             vendor: {
               create: {
@@ -54,22 +107,34 @@ async register(registerDto: RegisterDto) {
     });
 
     // 3. ASYNCHRONOUS POST-PROCESS
-    // Trigger the email AFTER the transaction is committed.
-    // We don't "await" this in a way that blocks the return to the user.
+    // Trigger background actions safely outside the committed database state thread
+
+    // A. Growth Pipeline Sync: Handle lineage logging and anti-fraud fingerprints
+    if (referredByCode && role !== UserRole.VENDOR) { 
+      this.referralService.handleUserSignupReferral(
+        newUser.id,
+        referredByCode,
+        ipAddress || '',
+        deviceFingerprint || ''
+      ).catch(err => {
+        console.error('🔴 Background Referral Tracking Error:', err.message);
+      });
+    }
+
+    // B. Communications Sync
     this.mailService.sendWelcomeEmail(newUser.email, {
       name: newUser.firstName || 'User',
       role: newUser.role,
     }).catch(err => {
-      // Log the error but don't stop the user from logging in
       console.error('🔴 Background Mail Error:', err.message);
     });
 
-    // Return immediately so the frontend can move to the next screen
+    // Return immediately to eliminate user-facing operational delays
     return newUser;
 
   } catch (error: any) {
     if (error.code === 'P2002') {
-      throw new ConflictException('This store name is already taken.');
+      throw new ConflictException('This store name or unique constraint identifier is already taken.');
     }
     throw new InternalServerErrorException('Registration failed. Please try again.');
   }

@@ -10,6 +10,10 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'First name is required' })
   firstName!: string;
 
+  referredByCode?: string;
+  ipAddress?: string;
+  deviceFingerprint?: string;
+
   @IsString()
   @IsNotEmpty({ message: 'Last name is required' })
   lastName!: string;

@@ -41,8 +41,70 @@ model User {
   tickets              Ticket[]
   returnRequests       ReturnRequest[]
   conversations        OrderConversation[]
+  isEmailVerified      Boolean              @default(false)
+  // Growth & System Network Vectors
+  referralCode         String               @unique // Generated securely: e.g., AVR-X7F92
+  referredById         String?
+  referredBy           User?                @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
+  invitees             User[]               @relation("UserReferrals")
+
+  hasUnlockedVoucher     Boolean @default(false)
+  hasUsedReferralVoucher Boolean @default(false)
+
+  // Fingerprints & Logistics Telemetry
+  signupIp          String?
+  deviceFingerprint String?
+
+  // System Ledgers
+  vouchers          Voucher[]
+  sentReferrals     ReferralLog[] @relation("ReferrerRelation")
+  receivedReferrals ReferralLog[] @relation("ReferredUserRelation")
 
   @@index([email])
+}
+
+model ReferralLog {
+  id                String  @id @default(uuid())
+  referrerId        String
+  referredUserId    String
+  referralCodeUsed  String
+  ipAddress         String?
+  deviceFingerprint String?
+  isQualified       Boolean @default(false) // Flips true when referred user completes verification
+  isFraudulent      Boolean @default(false) // Flagged by threshold checking loops
+
+  // Explicit relations
+  referrer     User @relation("ReferrerRelation", fields: [referrerId], references: [id], onDelete: Cascade)
+  referredUser User @relation("ReferredUserRelation", fields: [referredUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([referrerId])
+  @@index([referredUserId])
+}
+
+model Voucher {
+  id             String        @id @default(uuid())
+  code           String        @unique // Cryptographic format: e.g., VRF-8F12X
+  discountAmount Float         @default(2500)
+  minimumOrder   Float         @default(15000)
+  status         VoucherStatus @default(ACTIVE)
+  expiresAt      DateTime
+  usedAt         DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum VoucherStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  CANCELLED
 }
 
 model VendorFollower {

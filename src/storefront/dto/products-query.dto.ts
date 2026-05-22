@@ -10,6 +10,11 @@ export class StorefrontProductsQueryDto {
   category?: string;
 
   @IsOptional()
+  @IsString()
+  isFlashDeal?: string | boolean;
+
+
+  @IsOptional()
   @IsNumberString()
   maxPrice?: string;
 

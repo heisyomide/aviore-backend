@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma.service';
 import * as bcrypt from 'bcrypt';
 import { CreateAddressDto } from './dto/create-address.dto';
 import { refreshToken } from 'firebase-admin/app';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
@@ -10,13 +11,29 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   // --- IDENTITY LOGIC ---
-  async createUser(email: string, pass: string, role: 'ADMIN' | 'VENDOR' | 'CUSTOMER') {
+async createUser(
+    email: string, 
+    pass: string, 
+    role: 'ADMIN' | 'VENDOR' | 'CUSTOMER',
+    ipAddress?: string,
+    deviceFingerprint?: string
+  ) {
     const hashedPassword = await bcrypt.hash(pass, 12);
+
+    // 🚀 THE CRITICAL FIX: Generate unique unguessable code on creation to satisfy structural schema flags
+    const generatedReferralCode = `AVR-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
     return this.prisma.user.create({
-      data: { email, password: hashedPassword, role },
+      data: { 
+        email, 
+        password: hashedPassword, 
+        role,
+        referralCode: generatedReferralCode, // 👈 Satisfies your XOR UserCreateInput requirement
+        signupIp: ipAddress || null,
+        deviceFingerprint: deviceFingerprint || null
+      },
     });
   }
-
 
   async findByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email } });

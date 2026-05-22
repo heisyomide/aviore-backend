@@ -10,11 +10,12 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
 import { PrismaService } from '../prisma.service';
-
+import { ReferralModule } from '../referral/referral.module';
 @Module({
   imports: [
     UsersModule,
     MailModule,
+    ReferralModule,
     PassportModule.register({
       defaultStrategy: 'jwt',
     }),

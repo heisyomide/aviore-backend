@@ -212,7 +212,8 @@ async function main() {
           password: hashedPassword,
           role: 'VENDOR',
           firstName: 'Avicore',
-          lastName: 'Official'
+          lastName: 'Official',
+          referralCode: 'AVR-SEED1'
         },
       });
 
