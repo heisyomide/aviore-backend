@@ -10,10 +10,6 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'First name is required' })
   firstName!: string;
 
-  referredByCode?: string;
-  ipAddress?: string;
-  deviceFingerprint?: string;
-
   @IsString()
   @IsNotEmpty({ message: 'Last name is required' })
   lastName!: string;
@@ -26,13 +22,24 @@ export class RegisterDto {
   password!: string;
 
   @IsOptional()
-  @IsEnum(UserRole, { 
-    message: 'Role must be either CUSTOMER or VENDOR' 
-  })
+  @IsEnum(UserRole, { message: 'Role must be either CUSTOMER or VENDOR' })
   role?: UserRole;
 
   @IsOptional()
   @IsString()
   @IsNotEmpty({ message: 'Store name cannot be empty' })
   storeName?: string;
+
+  // 💡 DECORATE THESE SO THE VALIDATION PIPE ALLOWS THEM IN THE BODY:
+  @IsString()
+  @IsOptional()
+  referredByCode?: string;
+
+  @IsString()
+  @IsOptional()
+  ipAddress?: string;
+
+  @IsString()
+  @IsOptional()
+  deviceFingerprint?: string;
 }

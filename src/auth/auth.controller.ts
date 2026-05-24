@@ -42,24 +42,23 @@ export class AuthController {
     };
   }
 
-  // --- REGISTRATION ---
+// --- REGISTRATION ---
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   async register(@Body() registerDto: RegisterDto, @Req() req: express.Request) {
-    // Extract IP dynamically (accounting for upstream reverse proxies like Nginx/Cloudflare)
-    const ipAddress = 
+    // Extract IP dynamically if it wasn't already explicitly provided in the request body
+    const fallbackIp = 
       (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || 
       req.socket.remoteAddress || 
       '';
 
-    // Intercept custom modern frontend client fingerprint headers
-    const deviceFingerprint = (req.headers['x-device-fingerprint'] as string) || '';
+    const fallbackFingerprint = (req.headers['x-device-fingerprint'] as string) || '';
 
-    // Merge telemetry properties into your data transfer object payload channel
+    // Merge everything safely. If fields were sent in the body, keep them!
     const userPayload = {
       ...registerDto,
-      ipAddress,
-      deviceFingerprint,
+      ipAddress: registerDto.ipAddress || fallbackIp,
+      deviceFingerprint: registerDto.deviceFingerprint || fallbackFingerprint,
     };
 
     const newUser = await this.authService.register(userPayload);
