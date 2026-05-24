@@ -201,26 +201,31 @@ async toggleUserBlock(userId: string, adminId: string) {
  * Fetch all orders with User and Store details for the Admin Dashboard
  */
 async getAllOrders() {
-    return this.prisma.order.findMany({
-      include: {
-        user: {
-          select: { firstName: true, lastName: true, email: true }
-        },
-        items: {
-          include: {
-            product: { 
-              select: { 
-                title: true,
-                // Accessing vendor via the product relation
-                vendor: { select: { storeName: true } }
-              } 
-            },
-          }
-        }
+  return this.prisma.order.findMany({
+    include: {
+      // 💡 1. Fetch user metadata directly
+      user: {
+        select: { firstName: true, lastName: true, email: true }
       },
-      orderBy: { createdAt: 'desc' }
-    });
-  }
+      // 💡 2. Fetch the Order's Vendor store name directly from the parent relation
+      vendor: {
+        select: { storeName: true }
+      },
+      // 💡 3. Fetch list items and their matching titles safely
+      items: {
+        include: {
+          product: { 
+            select: { 
+              title: true
+              // Removed the invalid vendor relation traversal from here
+            } 
+          },
+        }
+      }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+}
 
   /**
    * Updates order status and logs the protocol change
