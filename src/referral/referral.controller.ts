@@ -10,7 +10,7 @@ export class ReferralController {
    * GET /api/storefront/referrals/dashboard
    * Fetches the user's secure referral code and their real-time verified milestone progress.
    */
-  @UseGuards(JwtAuthGuard)
+ 
   @Get('dashboard')
   @HttpCode(HttpStatus.OK)
   async getDashboardData(@Req() req: any) {

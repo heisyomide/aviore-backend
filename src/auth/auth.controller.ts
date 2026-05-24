@@ -1,27 +1,45 @@
 import { 
   Controller, Post, Body, HttpCode, HttpStatus, Req,
-  Get, UseGuards, Request, 
+  Get, UseGuards, 
   UnauthorizedException,
   Res,
-  Query
+  Query,
+  UseInterceptors
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
-import * as express from 'express';
+
+import * as express from 'express'; // 👈 Standard Express typings engine
 import { GetCookies } from '../common/decorators/get-cookies.decorator';
+import { AntiFraudGuard } from './guard/anti-fraud.guard';
+import { FingerprintRateLimitInterceptor } from './interceptors/fingerprint-ratelimit.interceptor';
+import { ReferralService } from 'src/referral/referral.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
+    private readonly referralService: ReferralService,
   ) {}
 
-  @Get('verify-email')
+@Get('verify-email')
   @HttpCode(HttpStatus.OK)
   async verifyEmail(@Query('token') token: string) {
-    return this.authService.verifyUserEmailDirect(token);
+    // 1. Execute email confirmation logic block
+    const result = await this.authService.verifyUserEmailDirect(token);
+    
+    // 2. 🚀 Safe check: verify that the operation succeeded and the user sub-object exists
+    if (result && result.success && result.user) {
+      await this.referralService.processReferralQualification(result.user.id);
+    }
+
+    // Return the original response footprint so your frontend contract doesn't break
+    return {
+      success: result.success,
+      message: result.message,
+    };
   }
 
   // --- REGISTRATION ---
@@ -56,19 +74,22 @@ export class AuthController {
   // --- LOGIN ---
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FingerprintRateLimitInterceptor) // 🛡️ Rate limit checks via memory layer
+  @UseGuards(AntiFraudGuard)                  // 🛡️ Checks user hardware profile context
   async login(
     @Body() dto: LoginDto,
-    @Req() req: any,
-    @Res({ passthrough: true }) res: express.Response,
+    @Req() req: express.Request, // 👈 FIXED: Swapped NestJS decorator out for real Express type
+    @Res({ passthrough: true }) res: express.Response, // 👈 FIXED: Synchronized cleanly with Express namespace
   ) {
     const result = await this.authService.login(dto, req);
     const isProd = process.env.NODE_ENV === 'production';
 
+    // 🍪 Strongly-typed options matching Express engine signatures
     const cookieOptions: express.CookieOptions = {
       httpOnly: true,
       secure: isProd,
       sameSite: isProd ? 'none' : 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7,
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 Days
       path: '/',
     };
 
@@ -86,8 +107,8 @@ export class AuthController {
   // --- PROFILE ---
   @UseGuards(JwtAuthGuard)
   @Get('profile')
-  getProfile(@Request() req) {
-    return req.user;
+  getProfile(@Req() req: express.Request) { // 👈 FIXED: Clearer typing for custom user objects
+    return (req as any).user;
   }
 
   // --- REFRESH TOKEN ---
@@ -124,7 +145,7 @@ export class AuthController {
   // --- LOGOUT ---
   @UseGuards(JwtAuthGuard)
   @Post('logout')
-  logout(@Request() req) {
-    return this.authService.logout(req.user.sessionId);
+  logout(@Req() req: express.Request) { // 👈 FIXED: Aligned type declaration
+    return this.authService.logout((req as any).user.sessionId);
   }
 }

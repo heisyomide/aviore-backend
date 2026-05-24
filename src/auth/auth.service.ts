@@ -22,15 +22,15 @@ export class AuthService {
 
 async verifyUserEmailDirect(userId: string) {
     // 1. Fetch the targeted registration account to ensure it exists
-    const user = await this.prisma.user.findUnique({
+    const updatedUser = await this.prisma.user.findUnique({
       where: { id: userId },
     });
 
-    if (!user) {
+    if (!updatedUser) {
       throw new NotFoundException('No user identity matched the requested execution parameters.');
     }
 
-    if (user.isEmailVerified) {
+    if (updatedUser.isEmailVerified) {
       return { success: true, message: 'Identity has already been authorized and activated.' };
     }
 
@@ -45,44 +45,50 @@ async verifyUserEmailDirect(userId: string) {
       console.error('🔴 Background Referral Qualification Error:', err.message);
     });
 
-    return { 
-      success: true, 
-      message: 'Email verified successfully. Growth acquisition tracks updated.' 
-    };
+return {
+    success: true,
+    message: 'Email verified successfully',
+    user: updatedUser // 👈 Pass the db record down the line here
+  };
   }
 
 
 
 async register(registerDto: RegisterDto) {
-  const { 
-    email, 
-    password, 
-    role, 
-    firstName, 
-    lastName, 
-    storeName,
-    referredByCode,
-    ipAddress,
-    deviceFingerprint
-  } = registerDto;
+    const { 
+      email, 
+      password, 
+      role, 
+      firstName, 
+      lastName, 
+      storeName,
+      referredByCode,
+      ipAddress,
+      deviceFingerprint
+    } = registerDto;
 
-  // 1. PRE-FLIGHT CHECK
-  const existingUser = await this.prisma.user.findUnique({ where: { email } });
-  if (existingUser) {
-    throw new ConflictException('An account with this email already exists');
-  }
+    const normalizedEmail = email.toLowerCase().trim();
 
-  const hashedPassword = await bcrypt.hash(password, 12);
-  
-  // SECURE GROWTH VECTORS: Generate an unalterable code for the new account immediately
-  const generatedReferralCode = this.referralService.generateSecureReferralCode();
+    // 1. PRE-FLIGHT CHECK
+    const existingUser = await this.prisma.user.findUnique({ 
+      where: { email: normalizedEmail } 
+    });
+    
+    if (existingUser) {
+      throw new ConflictException('An account with this email already exists');
+    }
 
-  try {
-    // 2. STRUCTURED TRANSACTION
-    const newUser = await this.prisma.$transaction(async (tx) => {
-      return await tx.user.create({
+    const hashedPassword = await bcrypt.hash(password, 12);
+    
+    // SECURE GROWTH VECTORS: Generate an unalterable code for the new account immediately
+    const generatedReferralCode = this.referralService.generateSecureReferralCode();
+
+    try {
+      // 2. DATABASE PERSISTENCE
+      // Single writes do not require a transaction wrapper. It saves connection pool latency.
+      const newUser = await this.prisma.user.create({
         data: {
-          email,
+          email: normalizedEmail,
           password: hashedPassword,
           firstName,
           lastName,
@@ -96,7 +102,7 @@ async register(registerDto: RegisterDto) {
           ...(role === UserRole.VENDOR && {
             vendor: {
               create: {
-                storeName: storeName || (firstName ? `${firstName}'s Shop` : email.split('@')[0]),
+                storeName: storeName || (firstName ? `${firstName}'s Shop` : normalizedEmail.split('@')[0]),
                 vendorWallet: { create: {} },
               },
             },
@@ -104,41 +110,45 @@ async register(registerDto: RegisterDto) {
         },
         include: { vendor: true },
       });
-    });
 
-    // 3. ASYNCHRONOUS POST-PROCESS
-    // Trigger background actions safely outside the committed database state thread
+      // 3. SECURE GROWTH LINEAGE PROCESSING
+      // If a customer inputs a referral code, execute it sequentially to catch validation 
+      // exceptions (like self-referral violations) and display them back to the client UI.
+      if (referredByCode && role !== UserRole.VENDOR) { 
+        await this.referralService.handleUserSignupReferral(
+          newUser.id,
+          referredByCode,
+          ipAddress || '',
+          deviceFingerprint || null
+        );
+      }
 
-    // A. Growth Pipeline Sync: Handle lineage logging and anti-fraud fingerprints
-    if (referredByCode && role !== UserRole.VENDOR) { 
-      this.referralService.handleUserSignupReferral(
-        newUser.id,
-        referredByCode,
-        ipAddress || '',
-        deviceFingerprint || ''
-      ).catch(err => {
-        console.error('🔴 Background Referral Tracking Error:', err.message);
+      // 4. ASYNCHRONOUS COMMUNICATIONS SYNC
+      // Emails have no operational impact on database state and can completely run in the background.
+      this.mailService.sendWelcomeEmail(newUser.email, {
+        name: newUser.firstName || 'User',
+        role: newUser.role,
+      }).catch(err => {
+        console.error('🔴 Background Mail Engine Failure:', err.message);
       });
+
+      // Return user profile cleanly to the controller layer
+      return newUser;
+
+    } catch (error: any) {
+      // Intercept Prisma unique constraint codes (e.g. unique vendor storeName collisions)
+      if (error.code === 'P2002') {
+        throw new ConflictException('This store name or unique constraint identifier is already taken.');
+      }
+      
+      // Pass up explicit validation errors thrown from the referral logic layers directly
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      throw new InternalServerErrorException('Registration pipeline failure. Please try again.');
     }
-
-    // B. Communications Sync
-    this.mailService.sendWelcomeEmail(newUser.email, {
-      name: newUser.firstName || 'User',
-      role: newUser.role,
-    }).catch(err => {
-      console.error('🔴 Background Mail Error:', err.message);
-    });
-
-    // Return immediately to eliminate user-facing operational delays
-    return newUser;
-
-  } catch (error: any) {
-    if (error.code === 'P2002') {
-      throw new ConflictException('This store name or unique constraint identifier is already taken.');
-    }
-    throw new InternalServerErrorException('Registration failed. Please try again.');
   }
-}
 
 // src/auth/auth.service.ts
 

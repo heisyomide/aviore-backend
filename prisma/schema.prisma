@@ -125,15 +125,15 @@ model VendorFollower {
 }
 
 model Session {
-  id           String @id @default(uuid())
-  userId       String
-  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshToken String
-
-  device    String // e.g., "iPhone 15, Chrome on Windows"
-  ipAddress String
-  lastUsed  DateTime @default(now())
-  isCurrent Boolean  @default(false)
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken      String
+  deviceFingerprint String?
+  device            String // e.g., "iPhone 15, Chrome on Windows"
+  ipAddress         String
+  lastUsed          DateTime @default(now())
+  isCurrent         Boolean  @default(false)
 }
 
 model BlockedIp {
@@ -146,12 +146,13 @@ model BlockedIp {
 }
 
 model LoginLog {
-  id        String   @id @default(cuid())
-  email     String
-  ip        String
-  userAgent String?
-  status    String // "SUCCESS" or "FAILED"
-  createdAt DateTime @default(now())
+  id                String   @id @default(cuid())
+  email             String
+  ip                String
+  userAgent         String?
+  deviceFingerprint String?
+  status            String // "SUCCESS" or "FAILED"
+  createdAt         DateTime @default(now())
 }
 
 model NotificationSetting {
@@ -449,15 +450,15 @@ model ProductImage {
 }
 
 model ProductVariant {
-  id        String  @id @default(uuid())
-  productId String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
+  id         String      @id @default(uuid())
+  productId  String
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
   // The "Matrix" Keys
   // Example: color: "Red", size: "Large"
-  color    String?
-  size     String?
-  material String? // Optional: for future proofing
+  color      String?
+  size       String?
+  material   String? // Optional: for future proofing
 
   // Overrides: If null, the system falls back to Product.basePrice
   price Decimal? @db.Decimal(12, 2)
@@ -596,18 +597,20 @@ model Review {
 }
 
 model OrderItem {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   quantity        Int
-  priceAtPurchase Decimal  @db.Decimal(12, 2)
-  order           Order    @relation(fields: [orderId], references: [id])
+  variantId       String?
+  priceAtPurchase Decimal         @db.Decimal(12, 2)
+  order           Order           @relation(fields: [orderId], references: [id])
   orderId         String
-  product         Product  @relation(fields: [productId], references: [id])
+  product         Product         @relation(fields: [productId], references: [id])
   productId       String
   // --- NEW FINANCIAL FIELDS ---
   commission      Float? // Platform's cut for this specific item
   vendorEarning   Float? // Net amount for the vendor
-  payoutStatus    String?  @default("PENDING") // e.g., "LOCKED", "AVAILABLE", "PAID"
-  createdAt       DateTime @default(now())
+  variant         ProductVariant? @relation(fields: [variantId], references: [id])
+  payoutStatus    String?         @default("PENDING") // e.g., "LOCKED", "AVAILABLE", "PAID"
+  createdAt       DateTime        @default(now())
 }
 
 model Payment {

@@ -1,7 +1,8 @@
 // src/storefront/storefront.controller.ts
-import { Controller, Get, HttpCode, HttpStatus, Param, Query } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { StorefrontService } from './storefront.service';
 import { StorefrontProductsQueryDto } from './dto/products-query.dto';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @Controller('storefront')
 export class StorefrontController {
@@ -96,4 +97,20 @@ async getCampaigns() {
     return this.storefrontService.getDiscoveryProducts(query);
   }
 
+  /**
+   * GET /api/storefront/vouchers/my-vouchers
+   * Fetches all vouchers assigned to the authenticated user's profile.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('my-vouchers')
+  @HttpCode(HttpStatus.OK)
+  async getMyVouchers(@Req() req: any) {
+    const userId = req.user.sub || req.user.id;
+    const vouchers = await this.storefrontService.findUserVouchers(userId);
+    
+    return {
+      success: true,
+      data: vouchers,
+    };
+  }
 }

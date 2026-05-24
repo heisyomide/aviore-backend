@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { ProductStatus, VendorStatus, Prisma } from '@prisma/client';
+import { ProductStatus, VendorStatus, Prisma, VoucherStatus} from '@prisma/client';
 import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 
 @Injectable()
@@ -725,6 +725,42 @@ async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
       count: products.length,
       products,
     };
+  }
+
+  /**
+   * Retrieves all vouchers belonging to a specific user profile context, sorted by newest first.
+   */
+  async findUserVouchers(userId: string) {
+    const vouchers = await this.prisma.voucher.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Transform database rows into clean, readable payloads for frontend cards
+    return vouchers.map((voucher) => {
+      const now = new Date();
+      const expiryDate = new Date(voucher.expiresAt);
+      
+      // Calculate remaining days dynamically
+      const timeDiff = expiryDate.getTime() - now.getTime();
+      const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+
+      // Calculate a highly accurate display status for the UI layer
+      let displayStatus = voucher.status;
+      if (voucher.status === VoucherStatus.ACTIVE && now > expiryDate) {
+        displayStatus = VoucherStatus.EXPIRED;
+      }
+
+      return {
+        id: voucher.id,
+        code: voucher.code,
+        discountAmount: voucher.discountAmount,
+        minimumOrder: voucher.minimumOrder,
+        status: displayStatus,
+        expiresAt: voucher.expiresAt,
+        daysRemaining: daysRemaining > 0 ? daysRemaining : 0,
+      };
+    });
   }
 
 }

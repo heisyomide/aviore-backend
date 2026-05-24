@@ -33,6 +33,8 @@ import { WishlistModule } from './wishlist/wishlist.module';
 import { BannerModule } from './admin/banner/banner.module';
 import { ReferralModule } from './referral/referral.module';
 import { VoucherModule } from './voucher/voucher.module';
+import { AntiAbuseService } from './common/services/anti-abuse.service';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Global()
 @Module({
@@ -147,11 +149,12 @@ CacheModule.registerAsync({
     WishlistModule,
     BannerModule,
     ReferralModule,
-    VoucherModule
+    VoucherModule,
+    AnalyticsModule
   ],
   controllers: [AppController],
-  providers: [AppService, PrismaService],
-  exports: [PrismaService],
+  providers: [AppService, PrismaService, AntiAbuseService],
+  exports: [PrismaService , AntiAbuseService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
