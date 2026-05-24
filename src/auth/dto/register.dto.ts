@@ -30,7 +30,6 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'Store name cannot be empty' })
   storeName?: string;
 
-  // 💡 DECORATE THESE SO THE VALIDATION PIPE ALLOWS THEM IN THE BODY:
   @IsString()
   @IsOptional()
   referredByCode?: string;
@@ -38,6 +37,11 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   ipAddress?: string;
+
+  // 💡 ADD THIS RIGHT HERE TO FIX THE LAST VALIDATION CRASH:
+  @IsString()
+  @IsOptional()
+  signupIp?: string;
 
   @IsString()
   @IsOptional()
