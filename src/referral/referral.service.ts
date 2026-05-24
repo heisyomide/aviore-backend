@@ -186,7 +186,7 @@ export class ReferralService {
 
     // 🌟 CRAFT THE HIGH-CONVERTING WHATSAPP MESSAGE:
     // This is the message text their friends will see.
-    const messageText = `Hey! Check out Aviore, you can set up your own digital storefront in minutes 🛍️. Use my referral code *${referralCode}* when signing up to unlock an exclusive ₦2,500 checkout voucher code for your first purchase! \n\nGet started here: https://aviore.shop/signup?ref=${referralCode}`;
+    const messageText = `Hey! Check out Aviore, you can set up your own digital storefront in minutes 🛍️. Use my referral code *${referralCode}* when signing up to unlock an exclusive ₦2,500 checkout voucher code for your first purchase! \n\nGet started here: https://shopaviore.com/register?ref=${referralCode}`;
 
     // Safely encode characters (like spaces, emojis, and question marks) so web browsers and phones read it flawlessly
     const whatsappShareUrl = `https://wa.me/?text=${encodeURIComponent(messageText)}`;

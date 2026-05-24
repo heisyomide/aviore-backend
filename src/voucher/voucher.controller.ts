@@ -38,4 +38,13 @@ export class VoucherController {
       code: voucher.code,
     };
   }
+
+  @UseGuards(JwtAuthGuard)
+@Get('my-vouchers')
+@HttpCode(HttpStatus.OK)
+async getMyVouchers(@Req() req: any) {
+  const userId = req.user.sub || req.user.id;
+  const vouchers = await this.voucherService.findUserVouchers(userId);
+  return vouchers;
+}
 }

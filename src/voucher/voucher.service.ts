@@ -66,4 +66,36 @@ export class VoucherService {
       },
     });
   }
+
+  async findUserVouchers(userId: string) {
+  const vouchers = await this.prisma.voucher.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+  });
+  return vouchers.map((voucher) => {
+    const now = new Date();
+    const expiryDate = new Date(voucher.expiresAt);
+    const timeDiff = expiryDate.getTime() - now.getTime();
+    const daysRemaining = Math.ceil(
+      timeDiff / (1000 * 60 * 60 * 24)
+    );
+    let displayStatus = voucher.status;
+    if (
+      voucher.status === VoucherStatus.ACTIVE &&
+      now > expiryDate
+    ) {
+      displayStatus = VoucherStatus.EXPIRED;
+    }
+    return {
+      id: voucher.id,
+      code: voucher.code,
+      discountAmount: voucher.discountAmount,
+      minimumOrder: voucher.minimumOrder,
+      status: displayStatus,
+      expiresAt: voucher.expiresAt,
+      daysRemaining:
+        daysRemaining > 0 ? daysRemaining : 0,
+    };
+  });
+}
 }
