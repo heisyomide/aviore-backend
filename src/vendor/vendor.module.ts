@@ -6,10 +6,14 @@ import { PrismaService } from 'src/prisma.service';
 import { VendorInterceptor } from './vendor.interceptor';
 import { CloudinaryProvider } from 'src/common/cloudinary/cloudinary.provider';
 import { CouponsModule } from '../coupons/coupons.module'; // <--- 1. Import the Module
+import { PrismaModule } from 'src/prisma.module';
+import { ProductsModule } from 'src/products/products.module';
 
 @Module({
   imports: [
     CouponsModule, // <--- 2. Add this to allow VendorController to use CouponService
+    PrismaModule,
+    ProductsModule,
     MulterModule.registerAsync({
       useFactory: () => ({
         limits: {

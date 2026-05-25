@@ -164,4 +164,28 @@ deleteVariant(
     req.user.id,
   );
 }
+
+
+  // ===============================
+  // 🔥 PRODUCT RECOMMENDATIONS
+  // ===============================
+  @Get(':id/recommendations')
+  async getRecommendations(@Param('id') id: string) {
+    return this.productsService.getProductRecommendations(id);
+  }
+
+  // ===============================
+  // 🌍 EXPLORE PRODUCTS
+  // ===============================
+  @Get('explore')
+  async getExploreProducts(
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.productsService.getExploreProducts(
+      Number(limit) || 20,
+      cursor,
+    );
+  }
+
 }

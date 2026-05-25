@@ -22,6 +22,7 @@ import { VendorInterceptor } from './vendor.interceptor';
 import { VendorCreateProductDto  } from './dto/vendor-product.dto';
 import { OrderStatus } from '@prisma/client';
 import { CouponService } from "../coupons/coupons.service";
+import { ProductsService } from 'src/products/products.service';
 
 @Controller('vendor')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,7 +31,8 @@ export class VendorController {
   constructor(
     private vendorService: VendorService,
     private readonly couponService: CouponService,
-    private prisma: PrismaService
+    private prisma: PrismaService,
+    private productsService: ProductsService
   ) {}
 
   // --- VENDOR SPECIFIC ROUTES ---
@@ -480,4 +482,10 @@ async getPublicVendors(
       req.user.id
     );
   }
+
+    @Get(':id/products')
+  async getVendorProducts(@Param('id') id: string) {
+    return this.productsService.getVendorProducts(id);
+  }
+
 }

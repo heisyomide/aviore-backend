@@ -679,4 +679,98 @@ async deleteVariant(variantId: string, userId: string) {
     where: { id: variantId },
   });
 }
+
+// ===============================
+  // 🔥 1. PRODUCT RECOMMENDATIONS
+  // ===============================
+  async getProductRecommendations(productId: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        category: true,
+      },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    // 1. Same category products (PRIMARY LOGIC)
+    const categoryProducts =
+      await this.prisma.product.findMany({
+        where: {
+          categoryId: product.categoryId,
+          id: { not: productId },
+          isDeleted: false,
+          isActive: true,
+        },
+        take: 12,
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+    // 2. Fallback: trending products (GLOBAL BACKUP)
+    const trendingProducts =
+      await this.prisma.product.findMany({
+        where: {
+          id: { not: productId },
+          isDeleted: false,
+          isActive: true,
+        },
+        orderBy: {
+          averageRating: 'desc',
+        },
+        take: 12,
+      });
+
+    // Merge + deduplicate
+    const map = new Map();
+
+    [...categoryProducts, ...trendingProducts].forEach((p) => {
+      if (!map.has(p.id)) {
+        map.set(p.id, p);
+      }
+    });
+
+    return Array.from(map.values()).slice(0, 20);
+  }
+
+  // ===============================
+  // 🏪 2. VENDOR PRODUCTS
+  // ===============================
+  async getVendorProducts(vendorId: string) {
+    return this.prisma.product.findMany({
+      where: {
+        vendorId,
+        isDeleted: false,
+        isActive: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 10,
+    });
+  }
+
+  // ===============================
+  // 🌍 3. EXPLORE PRODUCTS (GLOBAL FEED)
+  // ===============================
+  async getExploreProducts(limit = 20, cursor?: string) {
+    return this.prisma.product.findMany({
+      where: {
+        isDeleted: false,
+        isActive: true,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: limit,
+      ...(cursor && {
+        skip: 1,
+        cursor: { id: cursor },
+      }),
+    });
+  }
+
 }
