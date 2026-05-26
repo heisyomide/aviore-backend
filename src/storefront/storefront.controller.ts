@@ -113,4 +113,42 @@ async getCampaigns() {
       data: vouchers,
     };
   }
+
+
+  // ==================================
+// EXPLORE PRODUCTS
+// ==================================
+
+@Get('products/explore')
+async getExploreProducts(
+  @Query('limit') limit?: string,
+) {
+  return this.storefrontService.getExploreProducts(
+    Number(limit) || 20,
+  );
+}
+
+
+// ==================================
+// PRODUCT RECOMMENDATIONS
+// ==================================
+
+@Get('products/:id/recommendations')
+async getRecommendations(
+  @Param('id') id: string,
+) {
+  return this.storefrontService.getRecommendations(id);
+}
+
+
+// ==================================
+// VENDOR PRODUCTS
+// ==================================
+
+@Get('vendors/:id/products')
+async getVendorProducts(
+  @Param('id') id: string,
+) {
+  return this.storefrontService.getVendorProducts(id);
+}
 }

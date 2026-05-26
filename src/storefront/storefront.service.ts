@@ -5,7 +5,7 @@ import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 
 @Injectable()
 export class StorefrontService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService,) {}
 
   /**
    * 🛡️ TYPE-SAFE INCLUDE HELPER
@@ -763,4 +763,73 @@ async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
     });
   }
 
+
+ // ================================
+// RECOMMENDATIONS
+// ================================
+
+async getRecommendations(productId: string) {
+  const product = await this.prisma.product.findUnique({
+    where: { id: productId },
+  });
+
+  if (!product) return [];
+
+  return this.prisma.product.findMany({
+    where: {
+      id: { not: productId },
+      categoryId: product.categoryId,
+      status: 'APPROVED',
+      isActive: true,
+      isDeleted: false
+    },
+    take: 8,
+    include: {
+      images: true,
+      variants: true, // 👈 FIX: Pull variant data arrays for dynamic pricing metrics
+    },
+  });
+}
+
+// ================================
+// VENDOR PRODUCTS
+// ================================
+
+async getVendorProducts(vendorId: string) {
+  return this.prisma.product.findMany({
+    where: {
+      vendorId,
+      status: 'APPROVED',
+      isActive: true,
+      isDeleted: false
+    },
+    take: 8,
+    include: {
+      images: true,
+      variants: true, // 👈 FIX: Pull variant data arrays for dynamic pricing metrics
+    },
+  });
+}
+
+// ================================
+// EXPLORE
+// ================================
+
+async getExploreProducts(limit = 20) {
+  return this.prisma.product.findMany({
+    where: {
+      status: 'APPROVED',
+      isActive: true,
+      isDeleted: false
+    },
+    orderBy: {
+      createdAt: 'desc',
+    },
+    take: limit,
+    include: {
+      images: true,
+      variants: true, // 👈 FIX: Pull variant data arrays for dynamic pricing metrics
+    },
+  });
+}
 }
