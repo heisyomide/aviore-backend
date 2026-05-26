@@ -7,12 +7,17 @@ import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
 
 @Injectable()
 export class ProductsService {
-  private tokenize(query: string): string[] {
-  return query
+private normalize(text: string) {
+  return text
     .toLowerCase()
-    .split(' ')
-    .map((q) => q.trim())
-    .filter((q) => q.length > 0);
+    .trim()
+    .replace(/[^\w\s]/gi, '');
+}
+
+private tokenize(text: string) {
+  return this.normalize(text)
+    .split(/\s+/)
+    .filter(Boolean);
 }
   constructor(private prisma: PrismaService) {}
 
@@ -399,99 +404,239 @@ async searchPreview(query: string) {
       suggestions: [],
       products: [],
       categories: [],
+      vendors: [],
     };
   }
 
+  const normalized = this.normalize(query);
+
   const tokens = this.tokenize(query);
 
-  // 🔥 PRODUCT SEARCH (TOKEN MATCHING)
-  const products = await this.prisma.product.findMany({
-    where: {
-      isDeleted: false,
-      isActive: true,
-      status: 'APPROVED',
-      AND: tokens.map((token) => ({
-        OR: [
-          { title: { contains: token, mode: 'insensitive' } },
-          { category: { name: { contains: token, mode: 'insensitive' } } },
-        ],
-      })),
-    },
-    take: 8,
-    select: {
-      id: true,
-      title: true,
-      price: true,
-      images: {
-        take: 1,
-        select: { imageUrl: true },
-      },
-      variants: {
-        select: { price: true },
-      },
-      category: {
-        select: { name: true, slug: true },
-      },
-    },
-  });
+  // =========================
+  // PRODUCT SEARCH
+  // =========================
 
-  // 🔥 CATEGORY MATCH
-  const categories = await this.prisma.category.findMany({
-    where: {
-      name: {
-        contains: query,
-        mode: 'insensitive',
+  const products =
+    await this.prisma.product.findMany({
+      where: {
+        isDeleted: false,
+        isActive: true,
+        status: 'APPROVED',
+
+        AND: tokens.map((token) => ({
+          OR: [
+            {
+              title: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+
+            {
+              description: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+
+            {
+              category: {
+                name: {
+                  contains: token,
+                  mode: 'insensitive',
+                },
+              },
+            },
+
+            {
+              vendor: {
+                storeName: {
+                  contains: token,
+                  mode: 'insensitive',
+                },
+              },
+            },
+          ],
+        })),
       },
-    },
-    take: 5,
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-    },
-  });
 
-  // 🔥 SUGGESTIONS (BASED ON TITLES)
-  const suggestions = await this.prisma.product.findMany({
-    where: {
-      title: {
-        contains: query,
-        mode: 'insensitive',
+      take: 8,
+
+      include: {
+        images: {
+          take: 1,
+        },
+
+        category: true,
+
+        vendor: {
+          select: {
+            id: true,
+            storeName: true,
+          },
+        },
+
+        variants: {
+          select: {
+            price: true,
+          },
+        },
       },
-    },
-    take: 5,
-    select: {
-      title: true,
-    },
-  });
+    });
 
-  // 🔥 MAP PRODUCTS WITH CORRECT PRICE LOGIC
-  const mappedProducts = products.map((p) => {
-    const variantPrices = p.variants
-      .map((v) => Number(v.price))
-      .filter((v) => v > 0);
+  // =========================
+  // CATEGORY MATCH
+  // =========================
 
-    const displayPrice =
-      variantPrices.length > 0
-        ? Math.min(...variantPrices)
-        : Number(p.price) || 0;
+  const categories =
+    await this.prisma.category.findMany({
+      where: {
+        name: {
+          contains: normalized,
+          mode: 'insensitive',
+        },
+      },
 
-    return {
-      id: p.id,
-      title: p.title,
-      displayPrice,
-      imageUrl: p.images[0]?.imageUrl || null,
-      category: p.category?.name || '',
-    };
-  });
+      take: 5,
+    });
+
+  // =========================
+  // VENDOR MATCH
+  // =========================
+
+  const vendors =
+    await this.prisma.vendor.findMany({
+      where: {
+        storeName: {
+          contains: normalized,
+          mode: 'insensitive',
+        },
+      },
+
+      take: 5,
+
+      select: {
+        id: true,
+        storeName: true,
+        imageUrl: true,
+      },
+    });
+
+  // =========================
+  // SUGGESTIONS
+  // =========================
+
+  const suggestions = [
+    ...new Set(
+      products.map((p) => p.title)
+    ),
+  ].slice(0, 6);
+
+  // =========================
+  // MAP PRODUCTS
+  // =========================
+
+  const mappedProducts =
+    products.map((p) => {
+
+      const variantPrices =
+        p.variants
+          .map((v) => Number(v.price))
+          .filter((v) => v > 0);
+
+      const displayPrice =
+        variantPrices.length > 0
+          ? Math.min(...variantPrices)
+          : Number(p.price);
+
+      return {
+        id: p.id,
+        title: p.title,
+        imageUrl:
+          p.images?.[0]?.imageUrl || null,
+
+        displayPrice,
+
+        category:
+          p.category?.name || '',
+
+        vendor:
+          p.vendor?.storeName || '',
+      };
+    });
 
   return {
-    suggestions: suggestions.map((s) => s.title),
+    suggestions,
     products: mappedProducts,
     categories,
+    vendors,
   };
 }
 
+
+async searchProducts(
+  query: string,
+  page = 1,
+) {
+
+  const tokens =
+    this.tokenize(query);
+
+  const limit = 20;
+
+  const skip =
+    (page - 1) * limit;
+
+  const products =
+    await this.prisma.product.findMany({
+      where: {
+        isDeleted: false,
+        isActive: true,
+        status: 'APPROVED',
+
+        AND: tokens.map((token) => ({
+          OR: [
+            {
+              title: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+
+            {
+              description: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+
+            {
+              category: {
+                name: {
+                  contains: token,
+                  mode: 'insensitive',
+                },
+              },
+            },
+          ],
+        })),
+      },
+
+      skip,
+      take: limit,
+
+      include: {
+        images: true,
+        category: true,
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+  return products;
+}
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
    */

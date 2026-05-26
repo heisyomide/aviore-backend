@@ -124,7 +124,9 @@ export class ProductsController {
   }
 
 @Get('search/preview')
-async getSearchPreview(@Query('q') query: string) {
+async getSearchPreview(
+  @Query('q') query: string,
+) {
   return this.productsService.searchPreview(query);
 }
 
@@ -151,6 +153,17 @@ updateVariant(
     variantId,
     dto,
     req.user.id,
+  );
+}
+
+@Get('search')
+async searchProducts(
+  @Query('q') query: string,
+  @Query('page') page?: string,
+) {
+  return this.productsService.searchProducts(
+    query,
+    Number(page) || 1,
   );
 }
 

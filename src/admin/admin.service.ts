@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { VendorStatus, ProductStatus,WithdrawalStatus, KycStatus, AuditAction, OrderStatus, CouponType, Prisma, DiscountType, DisputeStatus, TicketStatus, Role} from '@prisma/client';
 import { startOfDay, startOfMonth, subDays, format } from 'date-fns';
@@ -6,8 +6,13 @@ import { v2 as cloudinary } from 'cloudinary';
 import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
 import { PaymentsService } from '../payments/payments.service';
+import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
+
+
+
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
    private resend = new Resend(process.env.RESEND_API_KEY);
  constructor(
   private prisma: PrismaService,
@@ -1527,4 +1532,120 @@ private async getRevenueTrends(startDate: Date) {
       totalOrders: orders
     };
   }
+
+async getPlatformGrowthMetrics(query: GrowthMetricsQueryDto) {
+  try {
+    const { timeRange } = query;
+    
+    // 1. Calculate historical date boundaries based on the timeRange query parameter
+    let targetDays = 7;
+    if (timeRange === '30d') targetDays = 30;
+    if (timeRange === '90d') targetDays = 90;
+    if (timeRange === '1y') targetDays = 365;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - targetDays);
+    const endDate = new Date(); // Current timestamp
+
+    // 2. Build the dynamic date filters
+    const dateFilter = {
+      createdAt: {
+        gte: startDate,
+        lte: endDate,
+      },
+    };
+
+    const [
+      totalUsers,
+      referredSignups,
+      verifiedReferrals,
+      totalVouchersIssued,
+      totalVouchersRedeemed,
+    ] = await this.prisma.$transaction([
+      // 1. Total core user accounts base (Scoped to timeframe)
+      this.prisma.user.count({ where: dateFilter }),
+
+      // 2. Raw referred signups captured
+      this.prisma.referralLog.count({ where: dateFilter }),
+
+      // 3. Count rows that successfully flipped the verification milestone
+      this.prisma.referralLog.count({ 
+        where: { 
+          ...dateFilter,
+          isQualified: true 
+        } 
+      }),
+
+      // 4. Total promotional assets generated
+      this.prisma.voucher.count({ where: dateFilter }),
+
+      // 5. Total metrics drawn out of processing states
+      this.prisma.voucher.count({ 
+        where: { 
+          ...dateFilter,
+          status: 'USED' 
+        } 
+      }),
+    ]);
+
+    // Calculate the Virality Coefficient (K-Factor)
+    const kFactor = totalUsers > 0 ? referredSignups / totalUsers : 0;
+
+    // Calculate conversion rate of referred invites to fully verified checks
+    const referralConversionRate = referredSignups > 0 
+      ? (verifiedReferrals / referredSignups) * 100 
+      : 0;
+
+    // Calculate financial utilization rate (Voucher Burn Rate)
+    const voucherBurnRate = totalVouchersIssued > 0 
+      ? (totalVouchersRedeemed / totalVouchersIssued) * 100 
+      : 0;
+
+    return {
+      timestamp: new Date(),
+      meta: {
+        isFilteredRange: true,
+        startDate: startDate,
+        endDate: endDate,
+      },
+      summary: {
+        totalPlatformUsers: totalUsers,
+        rawReferredSignups: referredSignups,
+        qualifiedReferrals: verifiedReferrals,
+        vouchersIssuedCount: totalVouchersIssued,
+        vouchersRedeemedCount: totalVouchersRedeemed,
+      },
+      performanceIndicators: {
+        kFactor: Number(kFactor.toFixed(2)),
+        conversionRatePercent: Number(referralConversionRate.toFixed(1)),
+        voucherBurnRatePercent: Number(voucherBurnRate.toFixed(1)),
+      },
+    };
+  } catch (error: any) {
+    this.logger.error(`GROWTH_ANALYTICS_AGGREGATION_FAILED: ${error.message}`, error.stack);
+    throw error;
+  }
+}
+
+// Separate metric block to catch system exploits
+async getTopGrowthDrivers(limit = 10) {
+  try {
+    return await this.prisma.referralLog.groupBy({
+      by: ['referrerId'],
+      _count: {
+        id: true,
+      },
+      where: { isQualified: true },
+      orderBy: {
+        _count: {
+          id: 'desc',
+        },
+      },
+      take: limit,
+    });
+  } catch (error: any) {
+    this.logger.error(`TOP_GROWTH_DRIVERS_FETCH_FAILED: ${error.message}`, error.stack);
+    throw error;
+  }
+}
 }

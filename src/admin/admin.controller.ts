@@ -19,11 +19,11 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 
-import { AdminService } from './admin.service';
+import { AdminService,  } from './admin.service';
 import { CouponService } from '../coupons/coupons.service';
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-
+import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
 import { Roles } from '../auth/roles.decorator';
 
 import { Role, ProductStatus, OrderStatus, TicketStatus } from '@prisma/client';
@@ -492,5 +492,10 @@ async broadcastNotification(
     if (!req.user?.id) {
       throw new UnauthorizedException('Admin authentication failed');
     }
+  }
+
+  @Get('analytics/growth')
+  async getPlatformGrowth(@Query() query: GrowthMetricsQueryDto) {
+    return this.adminService.getPlatformGrowthMetrics(query);
   }
 }
