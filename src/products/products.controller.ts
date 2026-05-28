@@ -1,204 +1,293 @@
-import { 
-  Controller, Post, Body, Get, UseGuards, 
-  Req, HttpCode, HttpStatus, Query, Patch, Param, Delete,
-  UseInterceptors, ParseUUIDPipe 
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  UseGuards,
+  Req,
+  HttpCode,
+  HttpStatus,
+  Query,
+  Patch,
+  Param,
+  Delete,
+  UseInterceptors,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+
+import {
+  CacheInterceptor,
+  CacheTTL,
+} from '@nestjs/cache-manager';
+
 import { ProductsService } from './products.service';
+
 import { CreateProductDto } from './dto/product.dto';
+
 import { UpdateProductDto } from './dto/update-product.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
-import { Roles } from '../auth/roles.decorator';
+
+import {
+  JwtAuthGuard,
+} from '../auth/jwt-auth.guard';
+
+import {
+  RolesGuard,
+} from '../auth/roles.guard';
+
+import {
+  Roles,
+} from '../auth/roles.decorator';
+
 import { Role } from '@prisma/client';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { ThrottlerGuard , Throttle} from '@nestjs/throttler';
-import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
+
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
+
+import {
+  ThrottlerGuard,
+  Throttle,
+} from '@nestjs/throttler';
+
+import {
+  CreateVariantDto,
+  UpdateVariantDto,
+} from './dto/variant.dto';
 
 @ApiTags('Product Registry')
 @Controller('products')
 export class ProductsController {
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+  ) {}
 
-  /**
-   * 1. VENDOR_INVENTORY (Private Registry)
-   * REFACTORED: Moved to the top to prevent :id hijacking.
-   */
+  // =========================================
+  // SEARCH PREVIEW
+  // =========================================
+
+  @Get('search/preview')
+  async getSearchPreview(
+    @Query('q') query: string,
+  ) {
+    return this.productsService.searchPreview(query);
+  }
+
+  // =========================================
+  // FULL SEARCH
+  // =========================================
+
+  @Get('search')
+  async searchProducts(
+    @Query('q') query: string,
+    @Query('page') page?: string,
+  ) {
+    return this.productsService.searchProducts(
+      query,
+      Number(page) || 1,
+    );
+  }
+
+
+  // =========================================
+  // MY PRODUCTS
+  // =========================================
+
   @Get('my-products')
   @ApiBearerAuth()
   @Roles(Role.VENDOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @ApiOperation({ summary: 'Retrieve artifacts belonging to the authenticated vendor node' })
-  async getMyProducts(@Req() req: any) {
-    return this.productsService.findByVendor(req.user.id);
+  async getMyProducts(
+    @Req() req: any,
+  ) {
+    return this.productsService.findByVendor(
+      req.user.id,
+    );
   }
 
-  /**
-   * 2. PUBLIC_CATALOG_FEED
-   */
+  // =========================================
+  // PUBLIC PRODUCTS
+  // =========================================
+
   @UseInterceptors(CacheInterceptor)
-  @CacheTTL(600) // 10 Minutes
+  @CacheTTL(600)
   @Get()
-  @ApiOperation({ summary: 'Public artifact feed with hierarchical filtering' })
   async findAll(
     @Query('search') search?: string,
     @Query('category') category?: string,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 12,
-    @Query('sort') sort?: 'price_asc' | 'price_desc' | 'newest',
+    @Query('sort')
+    sort?: 'price_asc' | 'price_desc' | 'newest',
   ) {
     return this.productsService.findAll({
       search,
       categoryId: category,
       page: Number(page),
       limit: Number(limit),
-      sort
+      sort,
     });
   }
 
-  /**
-   * 3. SINGLE_PRODUCT_DETAILS
-   * REFACTORED: Placed after static routes. 
-   * Passed the class 'ParseUUIDPipe' instead of 'new ParseUUIDPipe()' for performance.
-   */
+  // =========================================
+  // SINGLE PRODUCT
+  // MUST ALWAYS STAY LOWEST
+  // =========================================
+
   @Get(':id')
-  @ApiOperation({ summary: 'Inspect a specific artifact node by UUID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(
+    @Param('id', ParseUUIDPipe)
+    id: string,
+  ) {
     return this.productsService.findOne(id);
   }
 
-  /**
-   * 4. CREATE_PRODUCT
-   */
+  // =========================================
+  // CREATE PRODUCT
+  // =========================================
+
   @Post()
   @ApiBearerAuth()
   @Roles(Role.VENDOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Register a new artifact into the marketplace' })
-  async create(@Body() dto: CreateProductDto, @Req() req: any) {
-    return this.productsService.create(dto, req.user.id);
+  async create(
+    @Body() dto: CreateProductDto,
+    @Req() req: any,
+  ) {
+    return this.productsService.create(
+      dto,
+      req.user.id,
+    );
   }
 
-  /**
-   * 5. UPDATE_PRODUCT
-   */
+  // =========================================
+  // REVIEWS
+  // =========================================
+
+  @UseGuards(
+    JwtAuthGuard,
+    ThrottlerGuard,
+  )
+  @Throttle({
+    default: {
+      limit: 1,
+      ttl: 60000,
+    },
+  })
+  @Post(':id/reviews')
+  async createReview(
+    @Param('id', ParseUUIDPipe)
+    productId: string,
+
+    @Body()
+    dto: {
+      rating: number;
+      comment: string;
+    },
+
+    @Req() req: any,
+  ) {
+    return this.productsService.addReview(
+      productId,
+      req.user.id,
+      dto,
+    );
+  }
+
+  // =========================================
+  // VARIANTS
+  // =========================================
+
+  @Post(':productId/variants')
+  addVariant(
+    @Param('productId')
+    productId: string,
+
+    @Body()
+    dto: CreateVariantDto,
+
+    @Req() req,
+  ) {
+    return this.productsService.addVariant(
+      productId,
+      dto,
+      req.user.id,
+    );
+  }
+
+  @Patch('variants/:variantId')
+  updateVariant(
+    @Param('variantId')
+    variantId: string,
+
+    @Body()
+    dto: UpdateVariantDto,
+
+    @Req() req,
+  ) {
+    return this.productsService.updateVariant(
+      variantId,
+      dto,
+      req.user.id,
+    );
+  }
+
+  @Delete('variants/:variantId')
+  deleteVariant(
+    @Param('variantId')
+    variantId: string,
+
+    @Req() req,
+  ) {
+    return this.productsService.deleteVariant(
+      variantId,
+      req.user.id,
+    );
+  }
+
+  // =========================================
+  // UPDATE PRODUCT
+  // =========================================
+
   @Patch(':id')
   @ApiBearerAuth()
   @Roles(Role.VENDOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @ApiOperation({ summary: 'Modify artifact parameters' })
   async update(
-    @Param('id', ParseUUIDPipe) id: string, 
-    @Body() dto: UpdateProductDto, 
-    @Req() req: any
+    @Param('id', ParseUUIDPipe)
+    id: string,
+
+    @Body()
+    dto: UpdateProductDto,
+
+    @Req() req: any,
   ) {
-    return this.productsService.update(id, dto, req.user.id);
+    return this.productsService.update(
+      id,
+      dto,
+      req.user.id,
+    );
   }
 
-  /**
-   * 6. SOFT_DELETE_PRODUCT
-   */
+  // =========================================
+  // DELETE PRODUCT
+  // =========================================
+
   @Delete(':id')
   @ApiBearerAuth()
   @Roles(Role.VENDOR)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @ApiOperation({ summary: 'Decommission an artifact from public view' })
-  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    return this.productsService.remove(id, req.user.id);
-  }
+  async remove(
+    @Param('id', ParseUUIDPipe)
+    id: string,
 
-
-  //========================================
-  // REVIEWS
-  //=======================================
- @UseGuards(JwtAuthGuard, ThrottlerGuard)
-  @Throttle({ default: { limit: 1, ttl: 60000 } }) // Limit: 1 review per minute per user node
-  @Post(':id/reviews')
-  async createReview(
-    @Param('id', ParseUUIDPipe) productId: string,
-    @Body() dto: { rating: number; comment: string },
     @Req() req: any,
   ) {
-    return this.productsService.addReview(productId, req.user.id, dto);
-  }
-
-@Get('search/preview')
-async getSearchPreview(
-  @Query('q') query: string,
-) {
-  return this.productsService.searchPreview(query);
-}
-
-  @Post(':productId/variants')
-addVariant(
-  @Param('productId') productId: string,
-  @Body() dto: CreateVariantDto,
-  @Req() req,
-) {
-  return this.productsService.addVariant(
-    productId,
-    dto,
-    req.user.id,
-  );
-}
-
-@Patch('variants/:variantId')
-updateVariant(
-  @Param('variantId') variantId: string,
-  @Body() dto: UpdateVariantDto,
-  @Req() req,
-) {
-  return this.productsService.updateVariant(
-    variantId,
-    dto,
-    req.user.id,
-  );
-}
-
-@Get('search')
-async searchProducts(
-  @Query('q') query: string,
-  @Query('page') page?: string,
-) {
-  return this.productsService.searchProducts(
-    query,
-    Number(page) || 1,
-  );
-}
-
-@Delete('variants/:variantId')
-deleteVariant(
-  @Param('variantId') variantId: string,
-  @Req() req,
-) {
-  return this.productsService.deleteVariant(
-    variantId,
-    req.user.id,
-  );
-}
-
-
-  // ===============================
-  // 🔥 PRODUCT RECOMMENDATIONS
-  // ===============================
-  @Get(':id/recommendations')
-  async getRecommendations(@Param('id') id: string) {
-    return this.productsService.getProductRecommendations(id);
-  }
-
-  // ===============================
-  // 🌍 EXPLORE PRODUCTS
-  // ===============================
-  @Get('explore')
-  async getExploreProducts(
-    @Query('limit') limit?: string,
-    @Query('cursor') cursor?: string,
-  ) {
-    return this.productsService.getExploreProducts(
-      Number(limit) || 20,
-      cursor,
+    return this.productsService.remove(
+      id,
+      req.user.id,
     );
   }
-
 }

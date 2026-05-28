@@ -39,7 +39,7 @@ export class MailProcessor {
 
     try {
       await this.resend.emails.send({
-        from: 'Aviorè <onboarding@resend.dev>',
+        from: process.env.OFFICIAL_EMAIL_SENDER || 'AVIORÈ <onboarding@resend.dev>',
         to: userEmail,
         subject: '🎉 Welcome to the Elite: Your Aviorè Account is Ready',
         html: this.getTemplate(`
