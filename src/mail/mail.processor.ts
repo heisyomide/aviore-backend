@@ -22,7 +22,7 @@ type OrderEmailJob = {
 @Processor('mail-queue')
 export class MailProcessor {
   private readonly logger = new Logger(MailProcessor.name);
-  private readonly resend = new Resend(process.env.RESEND_API_KEY);
+  private readonly resend = new Resend(process.env.RESEND_API_KEY || 're_placeholder_key');
 
   // Luxury Design Constants
   private readonly brandColor = '#ff4d00';
@@ -37,9 +37,12 @@ export class MailProcessor {
     const { userEmail, details } = job.data;
     this.logger.log(`📩 Dispatching Luxury Welcome to ${userEmail}`);
 
+    // Fallback guaranteed to be a string, satisfying the compiler
+    const sender = process.env.OFFICIAL_EMAIL_SENDER || 'AVIORÈ <onboarding@resend.dev>';
+
     try {
       await this.resend.emails.send({
-        from: process.env.OFFICIAL_EMAIL_SENDER || 'AVIORÈ <onboarding@resend.dev>',
+        from: sender,
         to: userEmail,
         subject: '🎉 Welcome to the Elite: Your Aviorè Account is Ready',
         html: this.getTemplate(`
@@ -51,7 +54,7 @@ export class MailProcessor {
             <p style="margin: 0; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Access Level</p>
             <p style="margin: 5px 0 0; color: #fff; font-size: 18px; font-weight: bold;">${details.role}</p>
           </div>
-          <a href="${process.env.FRONTEND_URL}/dashboard" style="display: inline-block; background-color: ${this.brandColor}; color: white; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">Enter Dashboard</a>
+          <a href="${process.env.FRONTEND_URL || '#'}/dashboard" style="display: inline-block; background-color: ${this.brandColor}; color: white; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">Enter Dashboard</a>
         `),
       });
       this.logger.log(`✅ Welcome email sent successfully`);
@@ -69,9 +72,14 @@ export class MailProcessor {
     const { userEmail, details } = job.data;
     this.logger.log(`🔐 Dispatching Security Alert to ${userEmail}`);
 
+    // Modifying the display label dynamically but keeping the fallback string tight
+    const sender = process.env.OFFICIAL_EMAIL_SENDER 
+      ? process.env.OFFICIAL_EMAIL_SENDER.replace('AVIORÈ', 'AVIORÈ SECURITY')
+      : 'AVIORÈ SECURITY <onboarding@resend.dev>';
+
     try {
       const { data, error } = await this.resend.emails.send({
-        from: 'Aviorè Security <onboarding@resend.dev>',
+        from: sender,
         to: userEmail,
         subject: '🔐 Security Alert: New Login Detected',
         html: this.getTemplate(`
@@ -106,11 +114,17 @@ export class MailProcessor {
   @Process('sendOrderEmail')
   async handleOrderEmail(job: Job<OrderEmailJob>) {
     const { vendorEmail, orderDetails } = job.data;
+    this.logger.log(`🚀 Dispatching Order Email to ${vendorEmail}`);
+
+    const sender = process.env.OFFICIAL_EMAIL_SENDER 
+      ? process.env.OFFICIAL_EMAIL_SENDER.replace('AVIORÈ', 'Aviorè Marketplace')
+      : 'Aviorè Marketplace <onboarding@resend.dev>';
+
     try {
       await this.resend.emails.send({
-        from: 'Aviorè Marketplace <onboarding@resend.dev>',
+        from: sender,
         to: vendorEmail,
-        subject: '🚀 High-Value Sale: Order #${orderDetails.id}',
+        subject: `🚀 High-Value Sale: Order #${orderDetails.id}`,
         html: this.getTemplate(`
           <h1 style="font-size: 24px; margin-bottom: 10px;">You’ve got a sale! 🎉</h1>
           <p style="color: #a0a0a0;">Order <b>#${orderDetails.id}</b> is ready for fulfillment.</p>
@@ -119,7 +133,7 @@ export class MailProcessor {
             <p style="margin: 0; color: #888; font-size: 14px;">Total Earnings</p>
             <p style="margin: 5px 0 0; color: ${this.brandColor}; font-size: 32px; font-weight: bold;">₦${orderDetails.totalAmount.toLocaleString()}</p>
           </div>
-          <a href="${process.env.FRONTEND_URL}/vendor/orders" style="display: inline-block; border: 1px solid #444; color: #fff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-size: 14px;">Process Order</a>
+          <a href="${process.env.FRONTEND_URL || '#'}/vendor/orders" style="display: inline-block; border: 1px solid #444; color: #fff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-size: 14px;">Process Order</a>
         `),
       });
       this.logger.log(`✅ Order notification sent`);
