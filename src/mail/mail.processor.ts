@@ -3,166 +3,378 @@ import { Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 import { Resend } from 'resend';
 
-// 1. Define Types at the very top
 type WelcomeEmailJob = {
   userEmail: string;
-  details: { name: string; role: string };
+  details: {
+    name: string;
+    role: string;
+  };
 };
 
 type LoginEmailJob = {
   userEmail: string;
-  details: { name: string; ip: string; device: string };
+  details: {
+    name: string;
+    ip: string;
+    device: string;
+  };
 };
 
 type OrderEmailJob = {
   vendorEmail: string;
-  orderDetails: { id: string; totalAmount: number };
+  orderDetails: {
+    id: string;
+    totalAmount: number;
+  };
 };
 
 @Processor('mail-queue')
 export class MailProcessor {
   private readonly logger = new Logger(MailProcessor.name);
-  private readonly resend = new Resend(process.env.RESEND_API_KEY || 're_placeholder_key');
 
-  // Luxury Design Constants
-  private readonly brandColor = '#ff4d00';
-  private readonly bgColor = '#121212';
-  private readonly cardColor = '#1c1c1c';
+  private readonly resend = new Resend(
+    process.env.RESEND_API_KEY || 're_placeholder_key',
+  );
 
-  /**
-   * 1. WELCOME EMAIL
-   */
+  // =========================
+  // BRAND SYSTEM
+  // =========================
+  private readonly brandColor = '#ff5a1f';
+  private readonly bg = '#050505';
+  private readonly surface = '#0d0d0d';
+  private readonly surface2 = '#151515';
+  private readonly border = 'rgba(255,255,255,0.06)';
+  private readonly text = '#ffffff';
+  private readonly muted = '#9b9b9b';
+
+  private readonly fontSerif = "'Cinzel', 'Bodoni MT', 'Didot', serif";
+  private readonly fontSans = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+  // =========================
+  // WELCOME EMAIL
+  // =========================
   @Process('sendWelcomeEmail')
   async handleWelcomeEmail(job: Job<WelcomeEmailJob>) {
     const { userEmail, details } = job.data;
-    this.logger.log(`📩 Dispatching Luxury Welcome to ${userEmail}`);
+    this.logger.log(`📩 Welcome email -> ${userEmail}`);
 
-    // Fallback guaranteed to be a string, satisfying the compiler
     const sender = process.env.OFFICIAL_EMAIL_SENDER || 'AVIORÈ <onboarding@resend.dev>';
 
     try {
       await this.resend.emails.send({
         from: sender,
         to: userEmail,
-        subject: '🎉 Welcome to the Elite: Your Aviorè Account is Ready',
-        html: this.getTemplate(`
-          <h1 style="color: ${this.brandColor}; font-size: 26px; margin-bottom: 10px;">Welcome, ${details.name}</h1>
-          <p style="font-size: 16px; color: #a0a0a0; line-height: 1.6;">
-            Your journey into the world of luxury commerce begins here. Your account has been successfully curated.
-          </p>
-          <div style="margin: 30px 0; padding: 20px; border: 1px dashed #444; border-radius: 8px;">
-            <p style="margin: 0; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Access Level</p>
-            <p style="margin: 5px 0 0; color: #fff; font-size: 18px; font-weight: bold;">${details.role}</p>
-          </div>
-          <a href="${process.env.FRONTEND_URL || '#'}/dashboard" style="display: inline-block; background-color: ${this.brandColor}; color: white; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">Enter Dashboard</a>
-        `),
+        subject: 'Welcome to AVIORÈ',
+        html: this.renderTemplate({
+          content: `
+            ${this.heroSection({
+              eyebrow: 'Membership Curated',
+              title: 'Welcome',
+              highlight: details.name,
+              description: 'Your gateway into elite commerce, bespoke assets, and premium marketplace infrastructure is now active.',
+              buttonText: 'Enter Platform',
+              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/dashboard`,
+            })}
+
+            ${this.statGrid([
+              {
+                value: details.role,
+                label: 'Access Tier',
+              },
+              {
+                value: 'ACTIVE',
+                label: 'Platform Status',
+                accent: true,
+              },
+            ])}
+
+            ${this.featureStrip([
+              'Luxury Marketplace',
+              'Asset Registry',
+              'Priority Access',
+            ])}
+          `,
+        }),
       });
-      this.logger.log(`✅ Welcome email sent successfully`);
     } catch (error: any) {
-      this.logger.error(`❌ Welcome email failed: ${error.message}`);
+      this.logger.error(`Welcome email failed: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * 2. LOGIN ALERT
-   */
+  // =========================
+  // LOGIN ALERT
+  // =========================
   @Process('sendLoginEmail')
   async handleLoginEmail(job: Job<LoginEmailJob>) {
     const { userEmail, details } = job.data;
-    this.logger.log(`🔐 Dispatching Security Alert to ${userEmail}`);
+    this.logger.log(`🔐 Login alert -> ${userEmail}`);
 
-    // Modifying the display label dynamically but keeping the fallback string tight
-    const sender = process.env.OFFICIAL_EMAIL_SENDER 
+    const sender = process.env.OFFICIAL_EMAIL_SENDER
       ? process.env.OFFICIAL_EMAIL_SENDER.replace('AVIORÈ', 'AVIORÈ SECURITY')
       : 'AVIORÈ SECURITY <onboarding@resend.dev>';
 
     try {
-      const { data, error } = await this.resend.emails.send({
+      await this.resend.emails.send({
         from: sender,
         to: userEmail,
-        subject: '🔐 Security Alert: New Login Detected',
-        html: this.getTemplate(`
-          <h2 style="font-size: 22px; margin-bottom: 20px;">New Login Detected</h2>
-          <p style="color: #a0a0a0; font-size: 15px;">Hello ${details.name}, we noticed a new access point to your account.</p>
-          
-          <div style="background-color: #121212; border-radius: 12px; padding: 25px; margin: 30px 0; border: 1px solid #333; text-align: left;">
-            <div style="margin-bottom: 20px;">
-              <p style="margin: 0; font-size: 11px; color: ${this.brandColor}; letter-spacing: 1.5px; text-transform: uppercase;">Network Identity</p>
-              <p style="margin: 5px 0 0; font-size: 17px; font-family: monospace; color: #fff;">${details.ip}</p>
-            </div>
-            <div>
-              <p style="margin: 0; font-size: 11px; color: ${this.brandColor}; letter-spacing: 1.5px; text-transform: uppercase;">Device Information</p>
-              <p style="margin: 5px 0 0; font-size: 14px; color: #fff;">${details.device}</p>
-            </div>
-          </div>
-          <p style="color: #555; font-size: 13px;">If this wasn't you, please reset your password immediately.</p>
-        `),
-      });
+        subject: 'New Login Detected',
+        html: this.renderTemplate({
+          content: `
+            ${this.heroSection({
+              eyebrow: 'Security Monitor',
+              title: 'New Access',
+              highlight: 'Detected',
+              description: 'A new authenticated session was established on your administrative dashboard.',
+              buttonText: 'Review Session',
+              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/settings/security`,
+            })}
 
-      if (error) throw error;
-      this.logger.log(`✅ Security email sent: ${data?.id}`);
+            ${this.infoCard([
+              {
+                label: 'Network IP',
+                value: details.ip,
+              },
+              {
+                label: 'Device Engine',
+                value: details.device,
+              },
+            ])}
+          `,
+        }),
+      });
     } catch (error: any) {
-      this.logger.error(`❌ Login alert failed: ${error.message}`);
+      this.logger.error(`Login email failed: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * 3. ORDER EMAIL
-   */
+  // =========================
+  // ORDER EMAIL
+  // =========================
   @Process('sendOrderEmail')
   async handleOrderEmail(job: Job<OrderEmailJob>) {
     const { vendorEmail, orderDetails } = job.data;
-    this.logger.log(`🚀 Dispatching Order Email to ${vendorEmail}`);
+    this.logger.log(`🚀 Order email -> ${vendorEmail}`);
 
-    const sender = process.env.OFFICIAL_EMAIL_SENDER 
-      ? process.env.OFFICIAL_EMAIL_SENDER.replace('AVIORÈ', 'Aviorè Marketplace')
-      : 'Aviorè Marketplace <onboarding@resend.dev>';
+    const sender = process.env.OFFICIAL_EMAIL_SENDER
+      ? process.env.OFFICIAL_EMAIL_SENDER.replace('AVIORÈ', 'AVIORÈ MARKETPLACE')
+      : 'AVIORÈ MARKETPLACE <onboarding@resend.dev>';
 
     try {
       await this.resend.emails.send({
         from: sender,
         to: vendorEmail,
-        subject: `🚀 High-Value Sale: Order #${orderDetails.id}`,
-        html: this.getTemplate(`
-          <h1 style="font-size: 24px; margin-bottom: 10px;">You’ve got a sale! 🎉</h1>
-          <p style="color: #a0a0a0;">Order <b>#${orderDetails.id}</b> is ready for fulfillment.</p>
-          
-          <div style="background: linear-gradient(135deg, #1c1c1c 0%, #252525 100%); padding: 30px; border-radius: 12px; margin: 30px 0; border: 1px solid #333;">
-            <p style="margin: 0; color: #888; font-size: 14px;">Total Earnings</p>
-            <p style="margin: 5px 0 0; color: ${this.brandColor}; font-size: 32px; font-weight: bold;">₦${orderDetails.totalAmount.toLocaleString()}</p>
-          </div>
-          <a href="${process.env.FRONTEND_URL || '#'}/vendor/orders" style="display: inline-block; border: 1px solid #444; color: #fff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-size: 14px;">Process Order</a>
-        `),
+        subject: `New Marketplace Order #${orderDetails.id}`,
+        html: this.renderTemplate({
+          content: `
+            ${this.heroSection({
+              eyebrow: 'Marketplace Ledger',
+              title: '₦' + orderDetails.totalAmount.toLocaleString(),
+              highlight: 'Captured',
+              description: 'A high-value marketplace transaction has been successfully routed and logged.',
+              buttonText: 'Manage Order',
+              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/vendor/orders`,
+            })}
+
+            ${this.statGrid([
+              {
+                value: `#${orderDetails.id}`,
+                label: 'Order Reference',
+              },
+              {
+                value: 'CONFIRMED',
+                label: 'Payment Status',
+                accent: true,
+              },
+            ])}
+          `,
+        }),
       });
-      this.logger.log(`✅ Order notification sent`);
     } catch (error: any) {
-      this.logger.error(`❌ Order email failed: ${error.message}`);
+      this.logger.error(`Order email failed: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * MASTER LUXURY TEMPLATE
-   */
-  private getTemplate(content: string): string {
+  // =========================
+  // MASTER LAYOUT TEMPLATE
+  // =========================
+  private renderTemplate({ content }: { content: string }): string {
     return `
-      <div style="background-color: ${this.bgColor}; padding: 50px 20px; font-family: Arial, sans-serif; color: #fff; text-align: center;">
-        <div style="max-width: 550px; margin: 0 auto; background-color: ${this.cardColor}; border-radius: 16px; border: 1px solid #2a2a2a; overflow: hidden;">
-          <div style="padding: 40px 40px 20px;">
-             <h1 style="margin: 0; font-size: 22px; letter-spacing: 6px; color: #fff; font-weight: 300;">AVIORÈ</h1>
-             <div style="width: 30px; height: 2px; background-color: ${this.brandColor}; margin: 15px auto 0;"></div>
-          </div>
-          <div style="padding: 20px 40px 40px;">
-            ${content}
-          </div>
-          <div style="background-color: #161616; padding: 25px; border-top: 1px solid #2a2a2a;">
-            <p style="margin: 0; color: #444; font-size: 10px; letter-spacing: 1px; text-transform: uppercase;">
-              Spain &nbsp;•&nbsp; Lagos &nbsp;•&nbsp; New York
-            </p>
-          </div>
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      </head>
+      <body style="margin:0; padding:0; background-color:${this.bg}; font-family:${this.fontSans};">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${this.bg};">
+          <tr>
+            <td align="center" style="padding:40px 14px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; width:100%; border-radius:24px; background-color:${this.surface}; border:1px solid ${this.border}; overflow:hidden;">
+                
+                <!-- HEADER NAVIGATION LAYER -->
+                <tr>
+                  <td style="padding:35px 40px; border-bottom:1px solid ${this.border}; background-color:#090909;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="left">
+                          <div style="color:white; font-size:24px; letter-spacing:8px; font-family:${this.fontSerif}; font-weight:300;">
+                            AVIORÈ
+                          </div>
+                        </td>
+                        <td align="right">
+                          <div style="color:${this.muted}; font-size:10px; text-transform:uppercase; letter-spacing:2px; font-weight:500;">
+                            E-Commerce System
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- INJECTED WRAPPED COMPONENTS -->
+                <tr>
+                  <td style="padding:0; margin:0;">
+                    ${content}
+                  </td>
+                </tr>
+
+                <!-- FOOTER -->
+                <tr>
+                  <td style="padding:40px; text-align:center; background-color:#050505; border-top:1px solid ${this.border};">
+                    <p style="margin:0 0 12px 0; color:#5f5f5f; font-size:9px; letter-spacing:3px; text-transform:uppercase; font-weight:600;">
+                      Lagos • Madrid • New York
+                    </p>
+                    <p style="margin:0; color:#333333; font-size:9px; letter-spacing:1px; text-transform:uppercase;">
+                      © ${new Date().getFullYear()} AVIORÈ Collective. All rights reserved.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `;
+  }
+
+  // =========================
+  // COMPONENT METHODS
+  // =========================
+  private heroSection({
+    eyebrow,
+    title,
+    highlight,
+    description,
+    buttonText,
+    buttonLink,
+  }: {
+    eyebrow: string;
+    title: string;
+    highlight: string;
+    description: string;
+    buttonText: string;
+    buttonLink: string;
+  }): string {
+    return `
+      <div style="padding:60px 40px 40px 40px; background: linear-gradient(180deg, #121212 0%, ${this.surface} 100%); border-bottom:1px solid ${this.border}; text-align:left;">
+        <div style="color:${this.brandColor}; font-size:11px; text-transform:uppercase; letter-spacing:3px; margin-bottom:20px; font-weight:700;">
+          ${eyebrow}
         </div>
+        <div style="color:white; font-size:52px; line-height:0.95; font-family:${this.fontSerif}; font-weight:300; margin-bottom:4px; letter-spacing:-1px;">
+          ${title}
+        </div>
+        <div style="color:#505050; font-size:52px; line-height:1; font-family:${this.fontSerif}; font-weight:300; margin-bottom:24px; letter-spacing:-1px;">
+          ${highlight}
+        </div>
+        <p style="max-width:460px; color:#a0a0a0; font-size:15px; line-height:1.7; margin:0 0 35px 0; font-weight:300;">
+          ${description}
+        </p>
+        <a href="${buttonLink}" style="display:inline-block; padding:16px 36px; background-color:#ffffff; color:#000000; text-decoration:none; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:2px; border-radius:4px;">
+          ${buttonText}
+        </a>
+      </div>
+    `;
+  }
+
+  private statGrid(
+    stats: {
+      value: string;
+      label: string;
+      accent?: boolean;
+    }[],
+  ): string {
+    const columns = stats
+      .map(
+        (stat) => `
+      <td style="width:${100 / stats.length}%; padding:24px; border-radius:12px; background-color:${this.surface2}; border:1px solid ${this.border};">
+        <div style="color:${stat.accent ? this.brandColor : this.text}; font-size:26px; font-weight:700; margin-bottom:6px; font-family:${this.fontSans}; letter-spacing:-0.5px;">
+          ${stat.value}
+        </div>
+        <div style="color:${this.muted}; font-size:10px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500;">
+          ${stat.label}
+        </div>
+      </td>
+    `,
+      )
+      .join('<td width="16"></td>');
+
+    return `
+      <div style="padding:40px 40px 20px 40px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>${columns}</tr>
+        </table>
+      </div>
+    `;
+  }
+
+  private infoCard(items: { label: string; value: string }[]): string {
+    const rows = items
+      .map(
+        (item, index) => `
+      <div style="padding-top:${index === 0 ? '0' : '18px'}; padding-bottom:18px; ${index === items.length - 1 ? '' : `border-bottom:1px solid ${this.border};`}">
+        <div style="color:${this.muted}; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:6px; font-weight:500;">
+          ${item.label}
+        </div>
+        <div style="color:white; font-size:15px; line-height:1.5; font-family:monospace; color:#e0e0e0;">
+          ${item.value}
+        </div>
+      </div>
+    `,
+      )
+      .join('');
+
+    return `
+      <div style="padding:20px 40px 40px 40px;">
+        <div style="border-radius:12px; background-color:${this.surface2}; border:1px solid ${this.border}; padding:28px;">
+          ${rows}
+        </div>
+      </div>
+    `;
+  }
+
+  private featureStrip(items: string[]): string {
+    const blocks = items
+      .map(
+        (item) => `
+      <td align="center">
+        <div style="color:#e0e0e0; font-size:11px; letter-spacing:2px; text-transform:uppercase; font-weight:500;">
+          ${item}
+        </div>
+      </td>
+    `,
+      )
+      .join('<td style="color:#333333; font-size:14px; padding:0 10px;">•</td>');
+
+    return `
+      <div style="padding:10px 40px 40px 40px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" align="center">
+          <tr>${blocks}</tr>
+        </table>
       </div>
     `;
   }
