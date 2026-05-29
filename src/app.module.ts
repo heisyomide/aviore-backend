@@ -67,30 +67,35 @@ import { AnalyticsModule } from './analytics/analytics.module';
     
     // 🐂 3. BULL QUEUE (Stability Refactor)
    // 🐂 3. BULL QUEUE (Stability Refactor)
-BullModule.forRootAsync({
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => {
-    const redisUrl = config.get<string>('REDIS_URL');
-    
-    // Manual Parse to ensure options aren't dropped
-    return {
-      redis: {
-        // This spreads the URL details (host, port, auth)
-        // and forces the stability overrides
-        ...(typeof redisUrl === 'string' ? { url: redisUrl } : {}),
-        maxRetriesPerRequest: null,
-        enableReadyCheck: false,
-        retryStrategy: (times) => Math.min(times * 100, 3000),
+// 🐂 3. BULL QUEUE (Stability Refactor)
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const redisUrl = config.get<string>('REDIS_URL') || '';
+        
+        return {
+          redis: {
+            // This spreads the URL details (host, port, auth)
+            ...(typeof redisUrl === 'string' ? { url: redisUrl } : {}),
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false,
+            
+            // 🛡️ THE RENDER PRODUCTION FIX: Force secure TLS when rediss is active
+            tls: redisUrl.startsWith('rediss://') 
+              ? { rejectUnauthorized: false } 
+              : undefined,
+              
+            retryStrategy: (times) => Math.min(times * 100, 3000),
+          },
+          defaultJobOptions: {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5000 },
+            removeOnComplete: true,
+            removeOnFail: false,
+          },
+        };
       },
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: true,
-        removeOnFail: false,
-      },
-    };
-  },
-}),
+    }),
     // ⚡ 4. CACHE MANAGER (Stability Refactor)
 CacheModule.registerAsync({
   isGlobal: true,
