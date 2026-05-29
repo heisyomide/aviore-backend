@@ -65,23 +65,41 @@ import { AnalyticsModule } from './analytics/analytics.module';
       limit: 100, 
     }]),
     
-    // 🐂 3. BULL QUEUE (Stability Refactor)
-   // 🐂 3. BULL QUEUE (Stability Refactor)
-// 🐂 3. BULL QUEUE (Stability Refactor)
+    // 🐂 3. BULL QUEUE (Hardened Production Refactor)
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const redisUrl = config.get<string>('REDIS_URL') || '';
+        const isProd = config.get<string>('NODE_ENV') === 'production';
         
+        let redisConfigOptions: any = {};
+
+        try {
+          if (redisUrl.startsWith('redis://') || redisUrl.startsWith('rediss://')) {
+            // Parse URL safely into individual connection tokens to prevent connection parsing failure drops
+            const parsedUrl = new URL(redisUrl);
+            redisConfigOptions = {
+              host: parsedUrl.hostname,
+              port: parseInt(parsedUrl.port, 10) || (redisUrl.startsWith('rediss://') ? 6380 : 6379),
+              username: parsedUrl.username || undefined,
+              password: parsedUrl.password ? decodeURIComponent(parsedUrl.password) : undefined,
+            };
+          } else {
+            redisConfigOptions = { url: redisUrl };
+          }
+        } catch (e) {
+          // Absolute fallback if structural URL object compilation catches a local string error
+          redisConfigOptions = { url: redisUrl };
+        }
+
         return {
           redis: {
-            // This spreads the URL details (host, port, auth)
-            ...(typeof redisUrl === 'string' ? { url: redisUrl } : {}),
+            ...redisConfigOptions,
             maxRetriesPerRequest: null,
             enableReadyCheck: false,
             
-            // 🛡️ THE RENDER PRODUCTION FIX: Force secure TLS when rediss is active
-            tls: redisUrl.startsWith('rediss://') 
+            // 🛡️ THE RENDER PRODUCTION FIX: Hardened validation matching target infrastructure
+            tls: redisUrl.startsWith('rediss://') || isProd
               ? { rejectUnauthorized: false } 
               : undefined,
               
@@ -96,45 +114,39 @@ import { AnalyticsModule } from './analytics/analytics.module';
         };
       },
     }),
+
     // ⚡ 4. CACHE MANAGER (Stability Refactor)
-CacheModule.registerAsync({
-  isGlobal: true,
-  inject: [ConfigService],
-  useFactory: async (config: ConfigService) => {
-    const store = await redisStore({
-      url: config.get<string>('REDIS_URL'),
-      ttl: 600000,
-      socket: {
-        // 🟢 1. Give the connection 30 seconds to wake up (Crucial for Cloud/ISP lags)
-        connectTimeout: 30000, 
-        
-        // 🟢 2. Keep the connection alive
-        keepAlive: 5000,
+    CacheModule.registerAsync({
+      isGlobal: true,
+      inject: [ConfigService],
+      useFactory: async (config: ConfigService) => {
+        const store = await redisStore({
+          url: config.get<string>('REDIS_URL'),
+          ttl: 600000,
+          socket: {
+            connectTimeout: 30000, 
+            keepAlive: 5000,
+            tls: config.get<string>('REDIS_URL')?.startsWith('rediss://'),
+            reconnectStrategy: (retries) => {
+              if (retries > 20) return new Error('REDIS_TERMINAL_FAILURE');
+              return Math.min(retries * 200, 5000);
+            },
+          }
+        });
 
-        // 🟢 3. Force TLS if your URL starts with 'rediss://'
-        tls: config.get<string>('REDIS_URL')?.startsWith('rediss://'),
+        const client = store.client;
 
-        reconnectStrategy: (retries) => {
-          // 🟢 4. More aggressive retry for the first few attempts
-          if (retries > 20) return new Error('REDIS_TERMINAL_FAILURE');
-          return Math.min(retries * 200, 5000);
-        },
-      }
-    });
+        client.on('error', (err) =>
+          console.error('🔴 Redis Connection Logic:', err.message),
+        );
 
-    const client = store.client;
+        client.on('ready', () =>
+          console.log('🟢 Redis Node Synchronized'),
+        );
 
-    client.on('error', (err) =>
-      console.error('🔴 Redis Connection Logic:', err.message),
-    );
-
-    client.on('ready', () =>
-      console.log('🟢 Redis Node Synchronized'),
-    );
-
-    return { store: store as any };
-  },
-}),
+        return { store: store as any };
+      },
+    }),
     
     // 5. DOMAIN FEATURE MODULES
     AuthModule,
