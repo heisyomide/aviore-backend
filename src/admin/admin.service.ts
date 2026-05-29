@@ -814,32 +814,92 @@ async executeBroadcast(dto: {
 
   // 4. EMAIL RELAY (Resend Batch Protocol)
   if (dto.channels.email) {
-    const emailList = users.map(u => u.email);
-    
-    // Resend allows sending to multiple recipients in one call
-    // We wrap this in a try-catch to prevent one bad email from crashing the broadcast
+  // 🛡️ Filter out any null, undefined, or empty emails to prevent payload corruption
+  const emailList = users.map(u => u.email).filter(email => !!email);
+  
+  if (emailList.length > 0) {
     try {
-      await this.resend.emails.send({
-        from: 'AVIORÈ <no-reply@shopaviore.store>',
-        to: emailList, 
-        subject: dto.title,
-        html: `
-          <div style="font-family: sans-serif; background: #000; color: #fff; padding: 40px; border-radius: 24px; max-width: 600px; margin: auto; border: 1px solid #333;">
-            <h1 style="text-transform: uppercase; font-style: italic; letter-spacing: -1px; margin-bottom: 24px;">${dto.title}</h1>
-            <p style="color: #a1a1aa; line-height: 1.6; font-size: 16px;">${dto.message}</p>
-            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
-              <p style="font-size: 10px; color: #52525b; text-transform: uppercase; letter-spacing: 2px;">
-                Secure Transmission // Aviorè Command Center
-              </p>
-            </div>
-          </div>
-        `,
-      });
-      results.emailCount = emailList.length;
+      // Resend batch endpoint accepts up to 150 items per call. 100 is the optimal chunk size.
+      const batchSize = 100;
+      
+      for (let i = 0; i < emailList.length; i += batchSize) {
+        const emailChunk = emailList.slice(i, i + batchSize);
+        
+        // Map each email to its own completely isolated payload object
+        const batchPayload = emailChunk.map(targetEmail => ({
+          from: 'AVIORÈ <no-reply@shopaviore.store>',
+          to: targetEmail, // 🔒 Fixed: Ensures users only see their own email address
+          subject: dto.title,
+          html: `
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>${dto.title}</title>
+              </head>
+              <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+                <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+                  
+                  <!-- HEADER LOGO -->
+                  <tr>
+                    <td style="padding: 40px 40px 20px 40px; text-align: left;">
+                      <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
+                    </td>
+                  </tr>
+
+                  <!-- LINE SEPARATOR -->
+                  <tr>
+                    <td style="padding: 0 40px;">
+                      <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
+                    </td>
+                  </tr>
+
+                  <!-- BODY CONTENT -->
+                  <tr>
+                    <td style="padding: 40px 40px 30px 40px;">
+                      <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
+                        ${dto.title}
+                      </h1>
+                      <p style="color: #a3a3a3; font-size: 15px; line-height: 1.7; font-weight: 300; margin: 0 0 32px 0;">
+                        ${dto.message.replace(/\n/g, '<br>')}
+                      </p>
+                    </td>
+                  </tr>
+
+                  <!-- FOOTER SYSTEM ARCHITECTURE -->
+                  <tr>
+                    <td style="padding: 0 40px 40px 40px;">
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
+                        <tr>
+                          <td>
+                            <p style="margin: 0 0 4px 0; font-size: 10px; font-weight: 600; color: #404040; text-transform: uppercase; letter-spacing: 2px;">
+                              Secure Distribution // Aviorè Command Center
+                            </p>
+                            <p style="margin: 0; font-size: 11px; color: #262626;">
+                              This message was transmitted securely via internal system configurations.
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+
+                </table>
+              </body>
+            </html>
+          `,
+        }));
+
+        // Fire the clean, isolated batch array out to Resend's network
+        await this.resend.batch.send(batchPayload);
+        results.emailCount += emailChunk.length;
+      }
     } catch (error) {
-      console.error('EMAIL_RELAY_FAILURE:', error);
+      console.error('SECURE_EMAIL_BATCH_FAILURE:', error);
     }
   }
+}
 
   // 5. LOG AUTHORITY ACTION
   await this.prisma.auditLog.create({
