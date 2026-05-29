@@ -4,17 +4,17 @@ import { IsString, IsNotEmpty, IsEnum, IsObject, IsBoolean } from 'class-validat
 export class BroadcastDto {
   @IsString()
   @IsNotEmpty()
-  title: string;
+  title!: string;
 
   @IsString()
   @IsNotEmpty()
-  message: string;
+  message!: string;
 
   @IsEnum(['ALL', 'VENDORS', 'CUSTOMERS'])
-  target: 'ALL' | 'VENDORS' | 'CUSTOMERS';
+  target!: 'ALL' | 'VENDORS' | 'CUSTOMERS';
 
   @IsObject()
-  channels: {
+  channels!: {
     email: boolean;
     push: boolean;
     sms: boolean;

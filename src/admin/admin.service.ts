@@ -820,7 +820,7 @@ async executeBroadcast(dto: {
     // We wrap this in a try-catch to prevent one bad email from crashing the broadcast
     try {
       await this.resend.emails.send({
-        from: 'Aviorè <onboarding@resend.dev>',
+        from: 'Aviorè <discover@aviore.com>',
         to: emailList, 
         subject: dto.title,
         html: `
