@@ -1,5 +1,5 @@
 import { Process, Processor } from '@nestjs/bull';
-import { Logger } from '@nestjs/common';
+import { Get, Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 import { Resend } from 'resend';
 
@@ -73,7 +73,7 @@ export class MailProcessor {
               highlight: details.name,
               description: 'Your gateway into elite commerce, bespoke assets, and premium marketplace infrastructure is now active.',
               buttonText: 'Enter Platform',
-              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/dashboard`,
+              buttonLink: `${process.env.FRONTEND_URL}/dashboard`,
             })}
 
             ${this.statGrid([
@@ -127,7 +127,7 @@ export class MailProcessor {
               highlight: 'Detected',
               description: 'A new authenticated session was established on your administrative dashboard.',
               buttonText: 'Review Session',
-              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/settings/security`,
+              buttonLink: `${process.env.FRONTEND_URL}/settings/security`,
             })}
 
             ${this.infoCard([
@@ -174,7 +174,7 @@ export class MailProcessor {
               highlight: 'Captured',
               description: 'A high-value marketplace transaction has been successfully routed and logged.',
               buttonText: 'Manage Order',
-              buttonLink: `${process.env.FRONTEND_URL || 'https://aviore.club'}/vendor/orders`,
+              buttonLink: `${process.env.FRONTEND_URL }/vendor/orders`,
             })}
 
             ${this.statGrid([
@@ -378,4 +378,21 @@ export class MailProcessor {
       </div>
     `;
   }
+
+
+  @Get('debug-mail-direct')
+async testDirectMail() {
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  try {
+    const data = await resend.emails.send({
+      from: process.env.OFFICIAL_EMAIL_SENDER || 'onboarding@resend.dev',
+      to: 'YOUR_PERSONAL_EMAIL@gmail.com', // Put your email here
+      subject: '🚨 Direct Render Production Test',
+      html: '<h1>If you see this, the queue is the problem. If you dont, Resend/Domain is the problem.</h1>',
+    });
+    return { success: true, data };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
 }
