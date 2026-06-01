@@ -573,7 +573,6 @@ async searchPreview(query: string) {
   };
 }
 
-
 async searchProducts(
   query: string,
   page = 1,
@@ -581,142 +580,339 @@ async searchProducts(
   minPrice?: string,
   maxPrice?: string,
 ) {
-  const tokens = this.tokenize(query);
+  const normalized =
+    this.normalize(query);
+
+  const tokens =
+    this.tokenize(query);
 
   const limit = 20;
-  const skip = (page - 1) * limit;
 
-  const where: any = {
+  const skip =
+    (page - 1) * limit;
+
+  const baseWhere: any = {
     isDeleted: false,
     isActive: true,
     status: 'APPROVED',
+  };
 
-    AND: tokens.map((token) => ({
-      OR: [
-        {
-          title: {
-            contains: token,
-            mode: 'insensitive',
-          },
+  const include = {
+    images: true,
+
+    category: true,
+
+    vendor: {
+      select: {
+        id: true,
+        storeName: true,
+      },
+    },
+
+    variants: {
+      include: {
+        images: true,
+      },
+    },
+  };
+
+  /* ====================================
+     PRICE FILTER
+  ==================================== */
+
+  const variantPriceFilter: any = {};
+
+  if (minPrice) {
+    variantPriceFilter.gte =
+      Number(minPrice);
+  }
+
+  if (maxPrice) {
+    variantPriceFilter.lte =
+      Number(maxPrice);
+  }
+
+  if (
+    Object.keys(
+      variantPriceFilter,
+    ).length
+  ) {
+    baseWhere.variants = {
+      some: {
+        price:
+          variantPriceFilter,
+      },
+    };
+  }
+
+  /* ====================================
+     TIER 1 EXACT TITLE
+  ==================================== */
+
+  const exactMatches =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        title: {
+          equals: normalized,
+          mode: 'insensitive',
         },
+      },
 
-        {
-          description: {
-            contains: token,
-            mode: 'insensitive',
-          },
-        },
+      include,
+    });
 
-        {
-          category: {
-            name: {
+  /* ====================================
+     TIER 2 TITLE MATCH
+  ==================================== */
+
+  const titleMatches =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        OR: tokens.map(
+          (token) => ({
+            title: {
               contains: token,
               mode: 'insensitive',
             },
+          }),
+        ),
+      },
+
+      include,
+    });
+
+  /* ====================================
+     TIER 3 CATEGORY MATCH
+  ==================================== */
+
+  const categoryMatches =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        OR: tokens.map(
+          (token) => ({
+            category: {
+              name: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+          }),
+        ),
+      },
+
+      include,
+    });
+
+  /* ====================================
+     TIER 4 VENDOR MATCH
+  ==================================== */
+
+  const vendorMatches =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        OR: tokens.map(
+          (token) => ({
+            vendor: {
+              storeName: {
+                contains: token,
+                mode: 'insensitive',
+              },
+            },
+          }),
+        ),
+      },
+
+      include,
+    });
+
+  /* ====================================
+     TIER 5 DESCRIPTION MATCH
+  ==================================== */
+
+  const descriptionMatches =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        OR: tokens.map(
+          (token) => ({
+            description: {
+              contains: token,
+              mode: 'insensitive',
+            },
+          }),
+        ),
+      },
+
+      include,
+    });
+
+  /* ====================================
+     REMOVE DUPLICATES
+  ==================================== */
+
+  const rankedProducts =
+    [
+      ...exactMatches,
+      ...titleMatches,
+      ...categoryMatches,
+      ...vendorMatches,
+      ...descriptionMatches,
+    ].filter(
+      (product, index, self) =>
+        index ===
+        self.findIndex(
+          (p) =>
+            p.id === product.id,
+        ),
+    );
+
+  const matchedIds =
+    rankedProducts.map(
+      (p) => p.id,
+    );
+
+  /* ====================================
+     REMAINING PRODUCTS
+  ==================================== */
+
+  const remainingProducts =
+    await this.prisma.product.findMany({
+      where: {
+        ...baseWhere,
+
+        NOT: {
+          id: {
+            in: matchedIds,
           },
         },
-      ],
-    })),
-  };
+      },
 
-  /* ================= PRICE FILTER ================= */
+      include,
 
-  if (minPrice || maxPrice) {
-    where.price = {};
+      take: 300,
+    });
 
-    if (minPrice) {
-      where.price.gte = Number(minPrice);
-    }
+  let finalProducts = [
+    ...rankedProducts,
+    ...remainingProducts,
+  ];
 
-    if (maxPrice) {
-      where.price.lte = Number(maxPrice);
-    }
-  }
-  where.variants = {
-  some: {
-    price: {
-      gte: Number(minPrice || 0),
-      lte: Number(maxPrice || 999999999),
-    },
-  },
-};
+  /* ====================================
+     COMPUTE PRICE
+  ==================================== */
 
-  /* ================= SORTING ================= */
+  finalProducts =
+    finalProducts.map(
+      (product) => {
 
+        const variantPrices =
+          product.variants
+            ?.map((v) =>
+              Number(v.price),
+            )
+            .filter(
+              (v) => v > 0,
+            ) || [];
+
+        const displayPrice =
+          variantPrices.length
+            ? Math.min(
+                ...variantPrices,
+              )
+            : Number(
+                product.price,
+              );
+
+        const totalStock =
+          product.variants
+            ?.length
+            ? product.variants.reduce(
+                (
+                  sum,
+                  variant,
+                ) =>
+                  sum +
+                  (
+                    variant.stock ||
+                    0
+                  ),
+                0,
+              )
+            : product.stock || 0;
+
+        return {
+          ...product,
+          displayPrice,
+          totalStock,
+        };
+      },
+    );
+
+  /* ====================================
+     SORT
+  ==================================== */
   let orderBy: any = {
+
     createdAt: 'desc',
+
   };
+
+
 
   if (sort === 'low-high') {
+
     orderBy = {
+
       price: 'asc',
+
     };
+
   }
+
+
 
   if (sort === 'high-low') {
+
     orderBy = {
+
       price: 'desc',
+
     };
+
   }
 
-  const products = await this.prisma.product.findMany({
-    where,
+  const total =
+    finalProducts.length;
 
-    skip,
-    take: limit,
+  const paginated =
+    finalProducts.slice(
+      skip,
+      skip + limit,
+    );
 
-    include: {
-      images: true,
-
-      category: true,
-
-      vendor: {
-        select: {
-          id: true,
-          storeName: true,
-        },
-      },
-
-      variants: {
-        include: {
-          images: true,
-        },
-      },
-    },
-
-    orderBy,
-  });
-
-  /* ================= COMPUTE DISPLAY PRICE ================= */
-
-  return products.map((product) => {
-    const variantPrices =
-      product.variants
-        ?.map((v) => Number(v.price) || 0)
-        .filter((p) => p > 0) || [];
-
-    const displayPrice =
-      variantPrices.length > 0
-        ? Math.min(...variantPrices)
-        : Number(product.price || 0);
-
-    const totalStock =
-      product.variants?.length > 0
-        ? product.variants.reduce(
-            (sum, variant) =>
-              sum + (variant.stock || 0),
-            0,
-          )
-        : product.stock || 0;
-
-    return {
-      ...product,
-
-      displayPrice,
-
-      totalStock,
-    };
-  });
+  return {
+    query,
+    found:
+      rankedProducts.length > 0,
+    matchedCount:
+      rankedProducts.length,
+    total,
+    page,
+    totalPages:
+      Math.ceil(
+        total / limit,
+      ),
+    products: paginated,
+  };
 }
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE

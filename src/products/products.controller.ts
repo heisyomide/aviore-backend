@@ -81,10 +81,16 @@ export class ProductsController {
 @Get('search')
 async searchProducts(
   @Query('q') query: string,
+
   @Query('page') page?: string,
+
   @Query('sort') sort?: string,
-  @Query('minPrice') minPrice?: string,
-  @Query('maxPrice') maxPrice?: string,
+
+  @Query('minPrice')
+  minPrice?: string,
+
+  @Query('maxPrice')
+  maxPrice?: string,
 ) {
   return this.productsService.searchProducts(
     query,
