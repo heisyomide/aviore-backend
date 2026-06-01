@@ -78,16 +78,22 @@ export class ProductsController {
   // FULL SEARCH
   // =========================================
 
-  @Get('search')
-  async searchProducts(
-    @Query('q') query: string,
-    @Query('page') page?: string,
-  ) {
-    return this.productsService.searchProducts(
-      query,
-      Number(page) || 1,
-    );
-  }
+@Get('search')
+async searchProducts(
+  @Query('q') query: string,
+  @Query('page') page?: string,
+  @Query('sort') sort?: string,
+  @Query('minPrice') minPrice?: string,
+  @Query('maxPrice') maxPrice?: string,
+) {
+  return this.productsService.searchProducts(
+    query,
+    Number(page) || 1,
+    sort,
+    minPrice,
+    maxPrice,
+  );
+}
 
 
   // =========================================

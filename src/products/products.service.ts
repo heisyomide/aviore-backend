@@ -577,65 +577,146 @@ async searchPreview(query: string) {
 async searchProducts(
   query: string,
   page = 1,
+  sort?: string,
+  minPrice?: string,
+  maxPrice?: string,
 ) {
-
-  const tokens =
-    this.tokenize(query);
+  const tokens = this.tokenize(query);
 
   const limit = 20;
+  const skip = (page - 1) * limit;
 
-  const skip =
-    (page - 1) * limit;
+  const where: any = {
+    isDeleted: false,
+    isActive: true,
+    status: 'APPROVED',
 
-  const products =
-    await this.prisma.product.findMany({
-      where: {
-        isDeleted: false,
-        isActive: true,
-        status: 'APPROVED',
+    AND: tokens.map((token) => ({
+      OR: [
+        {
+          title: {
+            contains: token,
+            mode: 'insensitive',
+          },
+        },
 
-        AND: tokens.map((token) => ({
-          OR: [
-            {
-              title: {
-                contains: token,
-                mode: 'insensitive',
-              },
+        {
+          description: {
+            contains: token,
+            mode: 'insensitive',
+          },
+        },
+
+        {
+          category: {
+            name: {
+              contains: token,
+              mode: 'insensitive',
             },
+          },
+        },
+      ],
+    })),
+  };
 
-            {
-              description: {
-                contains: token,
-                mode: 'insensitive',
-              },
-            },
+  /* ================= PRICE FILTER ================= */
 
-            {
-              category: {
-                name: {
-                  contains: token,
-                  mode: 'insensitive',
-                },
-              },
-            },
-          ],
-        })),
+  if (minPrice || maxPrice) {
+    where.price = {};
+
+    if (minPrice) {
+      where.price.gte = Number(minPrice);
+    }
+
+    if (maxPrice) {
+      where.price.lte = Number(maxPrice);
+    }
+  }
+  where.variants = {
+  some: {
+    price: {
+      gte: Number(minPrice || 0),
+      lte: Number(maxPrice || 999999999),
+    },
+  },
+};
+
+  /* ================= SORTING ================= */
+
+  let orderBy: any = {
+    createdAt: 'desc',
+  };
+
+  if (sort === 'low-high') {
+    orderBy = {
+      price: 'asc',
+    };
+  }
+
+  if (sort === 'high-low') {
+    orderBy = {
+      price: 'desc',
+    };
+  }
+
+  const products = await this.prisma.product.findMany({
+    where,
+
+    skip,
+    take: limit,
+
+    include: {
+      images: true,
+
+      category: true,
+
+      vendor: {
+        select: {
+          id: true,
+          storeName: true,
+        },
       },
 
-      skip,
-      take: limit,
-
-      include: {
-        images: true,
-        category: true,
+      variants: {
+        include: {
+          images: true,
+        },
       },
+    },
 
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    orderBy,
+  });
 
-  return products;
+  /* ================= COMPUTE DISPLAY PRICE ================= */
+
+  return products.map((product) => {
+    const variantPrices =
+      product.variants
+        ?.map((v) => Number(v.price) || 0)
+        .filter((p) => p > 0) || [];
+
+    const displayPrice =
+      variantPrices.length > 0
+        ? Math.min(...variantPrices)
+        : Number(product.price || 0);
+
+    const totalStock =
+      product.variants?.length > 0
+        ? product.variants.reduce(
+            (sum, variant) =>
+              sum + (variant.stock || 0),
+            0,
+          )
+        : product.stock || 0;
+
+    return {
+      ...product,
+
+      displayPrice,
+
+      totalStock,
+    };
+  });
 }
   /**
    * ADMIN_GOVERNANCE: STATUS_UPDATE
