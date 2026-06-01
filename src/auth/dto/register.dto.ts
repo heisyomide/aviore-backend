@@ -32,7 +32,7 @@ export class RegisterDto {
 
   @IsString()
   @IsOptional()
-  referredByCode?: string;
+  referralCode?: string;
 
   @IsString()
   @IsOptional()

@@ -62,7 +62,7 @@ async register(registerDto: RegisterDto) {
       firstName, 
       lastName, 
       storeName,
-      referredByCode,
+      referralCode,
       ipAddress,
       deviceFingerprint
     } = registerDto;
@@ -114,10 +114,10 @@ async register(registerDto: RegisterDto) {
       // 3. SECURE GROWTH LINEAGE PROCESSING
       // If a customer inputs a referral code, execute it sequentially to catch validation 
       // exceptions (like self-referral violations) and display them back to the client UI.
-      if (referredByCode && role !== UserRole.VENDOR) { 
+      if (referralCode  && role !== UserRole.VENDOR) { 
         await this.referralService.handleUserSignupReferral(
           newUser.id,
-          referredByCode,
+          referralCode ,
           ipAddress || '',
           deviceFingerprint || null
         );
