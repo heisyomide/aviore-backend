@@ -55,100 +55,147 @@ return {
 
 
 async register(registerDto: RegisterDto) {
-    const { 
-      email, 
-      password, 
-      role, 
-      firstName, 
-      lastName, 
-      storeName,
-      referralCode,
-      ipAddress,
-      deviceFingerprint
-    } = registerDto;
+  const {
+    email,
+    password,
+    role,
+    firstName,
+    lastName,
+    storeName,
+    referralCode,
+    ipAddress,
+    deviceFingerprint,
+  } = registerDto;
 
-    const normalizedEmail = email.toLowerCase().trim();
+  console.log('==========================');
+  console.log('REGISTER REQUEST RECEIVED');
+  console.log('EMAIL:', email);
+  console.log('REFERRAL CODE:', referralCode);
+  console.log('ROLE:', role);
+  console.log('IP:', ipAddress);
+  console.log('FINGERPRINT:', deviceFingerprint);
+  console.log('==========================');
 
-    // 1. PRE-FLIGHT CHECK
-    const existingUser = await this.prisma.user.findUnique({ 
-      where: { email: normalizedEmail } 
-    });
-    
-    if (existingUser) {
-      throw new ConflictException('An account with this email already exists');
-    }
+  const normalizedEmail = email.toLowerCase().trim();
 
-    const hashedPassword = await bcrypt.hash(password, 12);
-    
-    // SECURE GROWTH VECTORS: Generate an unalterable code for the new account immediately
-    const generatedReferralCode = this.referralService.generateSecureReferralCode();
+  const existingUser = await this.prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
 
-    try {
-      // 2. DATABASE PERSISTENCE
-      // Single writes do not require a transaction wrapper. It saves connection pool latency.
-      const newUser = await this.prisma.user.create({
-        data: {
-          email: normalizedEmail,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          role: role || UserRole.CUSTOMER,
-          
-          // Inject permanent growth metadata fields
-          referralCode: generatedReferralCode,
-          signupIp: ipAddress || null,
-          deviceFingerprint: deviceFingerprint || null,
+  if (existingUser) {
+    throw new ConflictException(
+      'An account with this email already exists',
+    );
+  }
 
-          ...(role === UserRole.VENDOR && {
-            vendor: {
-              create: {
-                storeName: storeName || (firstName ? `${firstName}'s Shop` : normalizedEmail.split('@')[0]),
-                vendorWallet: { create: {} },
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const generatedReferralCode =
+    this.referralService.generateSecureReferralCode();
+
+  try {
+    const newUser = await this.prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        role: role || UserRole.CUSTOMER,
+
+        referralCode: generatedReferralCode,
+
+        signupIp: ipAddress || null,
+        deviceFingerprint: deviceFingerprint || null,
+
+        ...(role === UserRole.VENDOR && {
+          vendor: {
+            create: {
+              storeName:
+                storeName ||
+                (firstName
+                  ? `${firstName}'s Shop`
+                  : normalizedEmail.split('@')[0]),
+
+              vendorWallet: {
+                create: {},
               },
             },
-          }),
-        },
-        include: { vendor: true },
-      });
+          },
+        }),
+      },
 
-      // 3. SECURE GROWTH LINEAGE PROCESSING
-      // If a customer inputs a referral code, execute it sequentially to catch validation 
-      // exceptions (like self-referral violations) and display them back to the client UI.
-      if (referralCode  && role !== UserRole.VENDOR) { 
-        await this.referralService.handleUserSignupReferral(
-          newUser.id,
-          referralCode ,
-          ipAddress || '',
-          deviceFingerprint || null
-        );
-      }
+      include: {
+        vendor: true,
+      },
+    });
 
-      // 4. ASYNCHRONOUS COMMUNICATIONS SYNC
-      // Emails have no operational impact on database state and can completely run in the background.
-      this.mailService.sendWelcomeEmail(newUser.email, {
-        name: newUser.firstName || 'User',
-        role: newUser.role,
-      }).catch(err => {
-        console.error('🔴 Background Mail Engine Failure:', err.message);
-      });
+    console.log(
+      'NEW USER CREATED:',
+      newUser.id,
+    );
 
-      // Return user profile cleanly to the controller layer
-      return newUser;
+    if (
+      referralCode &&
+      role !== UserRole.VENDOR
+    ) {
+      console.log(
+        'STARTING REFERRAL PROCESS:',
+        referralCode,
+      );
 
-    } catch (error: any) {
-      // Intercept Prisma unique constraint codes (e.g. unique vendor storeName collisions)
-      if (error.code === 'P2002') {
-        throw new ConflictException('This store name or unique constraint identifier is already taken.');
-      }
-      
-      // Pass up explicit validation errors thrown from the referral logic layers directly
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      
-      throw new InternalServerErrorException('Registration pipeline failure. Please try again.');
+      await this.referralService.handleUserSignupReferral(
+        newUser.id,
+        referralCode,
+        ipAddress || '',
+        deviceFingerprint || null,
+      );
+
+      console.log(
+        'REFERRAL PROCESS COMPLETED',
+      );
+    } else {
+      console.log(
+        'NO REFERRAL CODE FOUND DURING REGISTRATION',
+      );
     }
+
+    this.mailService
+      .sendWelcomeEmail(newUser.email, {
+        name:
+          newUser.firstName || 'User',
+        role: newUser.role,
+      })
+      .catch((err) => {
+        console.error(
+          'MAIL ERROR:',
+          err.message,
+        );
+      });
+
+    return newUser;
+  } catch (error: any) {
+    console.error(
+      'REGISTER ERROR:',
+      error,
+    );
+
+    if (error.code === 'P2002') {
+      throw new ConflictException(
+        'This store name or unique constraint identifier is already taken.',
+      );
+    }
+
+    if (
+      error instanceof BadRequestException
+    ) {
+      throw error;
+    }
+
+    throw new InternalServerErrorException(
+      'Registration pipeline failure. Please try again.',
+    );
   }
+}
 
 // src/auth/auth.service.ts
 
