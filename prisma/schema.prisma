@@ -271,7 +271,17 @@ model Vendor {
   reviews              Review[]
   withdrawalRequests   WithdrawalRequest[]
   vendorWallet         VendorWallet?
+  
+  growthStatus       GrowthVendorStatus @default(PENDING)
+  verifiedProducts   Int                @default(0) // Live tracking counter updated via product lifecycle hooks
+  marketerId         String?
+  marketer           Marketer?          @relation("MarketerToVendor", fields: [marketerId], references: [id], onDelete: SetNull)
+  growthCommissionLogs GrowthCommissionLog[]
+
+  @@index([marketerId])
+  @@index([growthStatus])
 }
+
 
 model ProductCoupon {
   id        String @id @default(cuid())
@@ -519,6 +529,7 @@ model Order {
   orderConversation OrderConversation?
   dispute           Dispute?
   campaignLogs      OrderCampaign[]
+  growthCommissionLogs  GrowthCommissionLog?
 
   createdAt DateTime @default(now())
 }
@@ -935,4 +946,131 @@ model SystemSetting {
   value       String // stored as string, parsed in service
   description String?
   updatedAt   DateTime @updatedAt
+}
+
+
+// ==========================================
+//   AVIORÈ GROWTH MARKETING MODULES (NEW)
+// ==========================================
+
+enum MarketerRole {
+  HEAD
+  SUB_MARKETER
+}
+
+enum MarketerStatus {
+  ACTIVE
+  DEACTIVATED
+  SUSPENDED
+}
+
+enum GrowthVendorStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+}
+
+enum GrowthPayoutStatus {
+  PENDING
+  PROCESSING
+  SETTLED
+  REJECTED
+}
+
+model Marketer {
+  id           String         @id @default(uuid())
+  name         String
+  teamCode     String         // e.g., "TEAM_IO" -> Groups clusters together
+  passcodeHash String         // Secure bcrypt/argon2 hash of the 6-digit passcode
+  role         MarketerRole   @default(SUB_MARKETER)
+  status       MarketerStatus @default(ACTIVE)
+  
+  // Banking parameters appended for the Settlement Node 
+  bankName      String?       @default("Access Bank Plc")
+  accountNumber String?       @db.VarChar(10)
+  accountName   String?       // Verified settlement terminal beneficiary name
+
+  // Relations
+  wallet         MarketingWallet?
+  settings       MarketerSettings?       // Appended configurations relation link
+  vendors        Vendor[]                @relation("MarketerToVendor")
+  payouts        GrowthPayoutRequest[]
+  commissionLogs GrowthCommissionLog[]
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([teamCode, passcodeHash]) // Stops passcode collisions within the same team node cluster
+  @@index([teamCode])
+}
+
+model MarketerSettings {
+  id                    String   @id @default(uuid())
+  marketerId            String   @unique
+  marketer              Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+  
+  // Socket and transmission notification hooks
+  onVendorSignup        Boolean  @default(true)
+  onSaleDelivered       Boolean  @default(true)
+  onPayoutSettled       Boolean  @default(true)
+  weeklyDigest          Boolean  @default(false)
+  
+  // Micro strategy allocation metrics (Privileged cluster control)
+  globalAllocationSplit Int      @default(20) 
+  voucherSignLimit      Int      @default(5)  
+
+  updatedAt             DateTime @updatedAt
+}
+
+model MarketingWallet {
+  id            String   @id @default(uuid())
+  marketerId    String   @unique
+  balance       Float    @default(0.0) // Atomic float for growth marketing ledger tracking
+  
+  // Bank Details for Payout Routings
+  bankName      String?
+  accountNumber String?
+  accountName   String?
+
+  marketer   Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+  updatedAt  DateTime @updatedAt
+}
+
+model GrowthCommissionLog {
+  id                 String   @id @default(uuid())
+  orderId            String   @unique
+  marketerId         String
+  vendorId           String
+  
+  grossOrderAmount   Float    // Complete customer payment captured
+  platformFeeRetained Float   // The 8% net captured by Aviorè corporate
+  marketingSplitPaid Float    // The 2% split paid out to the marketer's wallet (20% of 10%)
+  vendorPayoutAmount Float    // The 90% merchant settlement amount
+
+  marketer           Marketer @relation(fields: [marketerId], references: [id])
+  vendor             Vendor   @relation(fields: [vendorId], references: [id])
+  order              Order    @relation(fields: [orderId], references: [id])
+
+  createdAt          DateTime @default(now())
+
+  @@index([marketerId])
+  @@index([vendorId])
+}
+
+model GrowthPayoutRequest {
+  id              String             @id @default(uuid())
+  marketerId      String
+  amount          Float
+  status          GrowthPayoutStatus @default(PENDING)
+  referenceString String             @unique // Tracking string generated for bank sweep integrations
+  
+  bankName        String
+  accountNumber   String
+  accountName     String
+
+  marketer        Marketer           @relation(fields: [marketerId], references: [id])
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([marketerId])
 }

@@ -35,6 +35,15 @@ import { ReferralModule } from './referral/referral.module';
 import { VoucherModule } from './voucher/voucher.module';
 import { AntiAbuseService } from './common/services/anti-abuse.service';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { GrowthAuthModule } from './growth/auth/auth.module';
+import { GrowthAnalyticsModule } from './growth/analytics/analytics.module';
+import { GrowthWalletModule } from './growth/wallet/growth-wallet.module';
+import { GrowthTransactionsModule } from './growth/transaction/growth-transactions.module';
+import { GrowthToolsModule } from './growth/tools/growth-tools.module';
+import { GrowthLeaderboardModule } from './growth/leaderboard/growth-leaderboard.module';
+import { GrowthSettingsModule } from './growth/settings/growth-settings.module';
+import { GrowthDashboardModule } from './growth/dashboard/dashboard.module';
+import { GrowthVendorsModule } from './growth/vendors/growth-vendors.module';
 
 @Global()
 @Module({
@@ -167,7 +176,16 @@ import { AnalyticsModule } from './analytics/analytics.module';
     BannerModule,
     ReferralModule,
     VoucherModule,
-    AnalyticsModule
+    AnalyticsModule,
+    GrowthAuthModule,
+    GrowthAnalyticsModule,
+    GrowthWalletModule,
+    GrowthTransactionsModule,
+    GrowthToolsModule,
+    GrowthLeaderboardModule,
+    GrowthSettingsModule,
+    GrowthDashboardModule,
+    GrowthVendorsModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService, AntiAbuseService],

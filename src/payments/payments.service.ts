@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma.service';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import axios from 'axios';
+import { GrowthCommissionLedgerService } from 'src/growth/ledger/commission-ledger.service';
 
 const Flutterwave = require('flutterwave-node-v3');
 
@@ -18,7 +19,9 @@ export class PaymentsService implements OnModuleInit {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly COMMISSION_RATE = 0.1;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, 
+    private readonly commissionLedgerService: GrowthCommissionLedgerService,
+  ) {}
 
   onModuleInit() {
     const { FLW_PUBLIC_KEY, FLW_SECRET_KEY } = process.env;
@@ -151,7 +154,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // WEBHOOK GATEWAY RESOLVER
   // =====================================================
-  async handleWebhook(signature: string, body: any) {
+ async handleWebhook(signature: string, body: any) {
     const secretHash = process.env.FLW_WEBHOOK_HASH;
     if (!signature || signature !== secretHash) {
       throw new BadRequestException('INVALID_SIGNATURE');
@@ -187,7 +190,6 @@ export class PaymentsService implements OnModuleInit {
         return { status: 'IGNORED' };
       }
 
-      // Handle explicit failures immediately
       if (['failed', 'cancelled'].includes(status)) {
         await this.handleFailedPayment(tx, payment.id, payment.orderId);
         return { status: 'FAILED' };
@@ -221,6 +223,15 @@ export class PaymentsService implements OnModuleInit {
 
       // 3. Trigger atomic escrow settlement allocations and clean stock deductions
       await this.settleOrderItems(tx, payment.order.items);
+
+      // 4. 💡 THE GROWTH COMMISSION ENGINE HOOK TRIGGER
+      // Passes the transactional context cleanly down the split loop pipeline
+      await this.commissionLedgerService.processOrderCommissionSplitWithTx(
+        payment.orderId,
+        payment.order.vendorId ?? '',
+        expectedAmount,
+        tx
+      );
 
       return { status: 'SUCCESS' };
     });

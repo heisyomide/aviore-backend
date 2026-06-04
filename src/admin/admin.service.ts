@@ -7,6 +7,7 @@ import * as admin from 'firebase-admin';
 import { Resend } from 'resend';
 import { PaymentsService } from '../payments/payments.service';
 import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
+import { GrowthVendorsActivationService } from 'src/growth/vendors/vendors-activation.service';
 
 
 
@@ -17,6 +18,7 @@ export class AdminService {
  constructor(
   private prisma: PrismaService,
   private paymentsService: PaymentsService,
+  private readonly activationService: GrowthVendorsActivationService,
 ) {}
 
 
@@ -450,6 +452,15 @@ async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
         details: `Product status updated from ${existingProduct.status} to ${status}`,
       }
     });
+
+    // 💡 AUTOMATIC GROWTH INTERCEPTOR HOOK
+    // If the product was approved or rejected, automatically re-evaluate the vendor's active metrics
+    if (status === ProductStatus.APPROVED || status === ProductStatus.REJECTED) {
+      await this.activationService.evaluateVendorActivationWithTx(
+        existingProduct.vendorId, 
+        tx
+      );
+    }
 
     return updatedProduct;
   });

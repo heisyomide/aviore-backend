@@ -3,11 +3,12 @@ import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
 import { PrismaService } from '../prisma.service';
 import { MailModule } from 'src/mail/mail.module';
+import { GrowthCommissionLedgerService } from 'src/growth/ledger/commission-ledger.service';
 
 @Module({
   imports: [MailModule],
   controllers: [PaymentsController],
-  providers: [PaymentsService, PrismaService],
+  providers: [PaymentsService, PrismaService, GrowthCommissionLedgerService],
   exports: [PaymentsService], // ✅ Fixed: changed {} to []
 })
 export class PaymentsModule {}
