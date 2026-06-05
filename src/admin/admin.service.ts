@@ -61,17 +61,27 @@ async getAdminDashboardOverview() {
   // VENDOR MANAGEMENT
   // =========================================================
 
-  async getPendingKycVendors() {
-    return this.prisma.vendor.findMany({
-      where: { kycStatus: 'PENDING' },
-      include: {
-        user: {
-          select: { firstName: true, lastName: true, email: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
-  }
+async getPendingKycVendors() {
+  return this.prisma.vendor.findMany({
+    where: { kycStatus: 'PENDING' },
+    include: {
+      user: {
+        select: { firstName: true, lastName: true, email: true }
+      }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+}
+
+async getAllVendors() {
+  return this.prisma.vendor.findMany({
+    include: {
+      user: true,
+      _count: { select: { products: true } }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+}
 
   // admin.service.ts
 
@@ -135,16 +145,6 @@ async rejectVendorKyc(vendorId: string, adminId: string, reason: string) {
 }
 
 
-
-  async getAllVendors() {
-    return this.prisma.vendor.findMany({
-      include: {
-        user: true,
-        _count: { select: { products: true } }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
-  }
 
   // =========================================================
   // USER MANAGEMENT
