@@ -34,24 +34,27 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Access Denied: Missing cryptographic identity token.');
     }
 
-    try {
-      // Decode and verify using your exact environment growth key vector
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: process.env.JWT_GROWTH_SECRET || 'fallback_growth_node_secret_key',
-      });
-      
-      // Normalize layout structure to bridge standard JWT claims cleanly with internal models
-      request.user = {
-        id: payload.id || payload.sub,
-        sub: payload.sub || payload.id,
-        name: payload.name,
-        teamCode: payload.teamCode,
-        role: payload.role as MarketerRole,
-      };
-    } catch (error) {
-      throw new UnauthorizedException('Access Denied: Session token has expired or is invalid.');
-    }
 
+
+try {
+  // 🎯 FORCE the specific secret directly inside the verification method call
+  const payload = await this.jwtService.verifyAsync(token, {
+    secret: process.env.JWT_GROWTH_SECRET || 'fallback_growth_node_secret_key',
+  });
+  
+  // Normalize layout structure to bridge standard JWT claims cleanly with internal models
+  request.user = {
+    id: payload.id || payload.sub,
+    sub: payload.sub || payload.id,
+    name: payload.name,
+    teamCode: payload.teamCode,
+    role: payload.role as MarketerRole,
+  };
+} catch (error) {
+  // This will catch the invalid signature and print it cleanly to your console during testing
+  // console.error('JWT Verification Failed Error details:', error);
+  throw new UnauthorizedException('Access Denied: Session token has expired or is invalid.');
+}
     return true;
   }
 

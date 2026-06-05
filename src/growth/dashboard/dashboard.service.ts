@@ -23,14 +23,17 @@ export class GrowthDashboardService {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // 2. Fetch all raw vendor metrics linked to this specific marketer identifier
-    const vendors = await this.prisma.vendor.findMany({
-      where: { marketerId: marketer.id },
+    // 2. Fetch all raw vendor metrics linked to the ENTIRE shared teamCode cluster scope
+    const teamVendors = await this.prisma.vendor.findMany({
+      where: { 
+        marketer: {
+          teamCode: marketer.teamCode // 🎯 Shared view: Grabs everyone operating in the cluster
+        }
+      },
       include: {
         _count: {
           select: { products: true } // Counts vendor items dynamically
         },
-        // Pull sales occurrences matching delivery success criteria
         orders: {
           where: { status: 'DELIVERED' },
           select: { id: true },
@@ -39,38 +42,38 @@ export class GrowthDashboardService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // 3. Compute dynamic counts for the summary cards
-    const totalVendorsReferred = vendors.length;
+    // 3. Compute dynamic cluster counts for the shared team summary metrics
+    const totalVendorsReferred = teamVendors.length;
     
-    // Active counts matching your 5+ verified product automation requirement
-    const activeVendorsCount = vendors.filter(v => v._count.products >= 5).length;
+    // Active counts matching your 5+ verified product automation requirement across the team
+    const activeVendorsCount = teamVendors.filter(v => v._count.products >= 5).length;
 
-    // Sum up cumulative sales completions across your cohort pipeline
-    const totalSalesCompleted = vendors.reduce((sum, v) => sum + v.orders.length, 0);
+    // Sum up cumulative sales completions across your global cohort pipeline
+    const totalSalesCompleted = teamVendors.reduce((sum, v) => sum + v.orders.length, 0);
 
-    // 4. Calculate Total Earnings from logs targeting the current monthly cycle using true schema keys
+    // 4. Calculate Total Earnings from logs targeting the current monthly cycle—ISOLATED strictly to this individual
     const monthlyEarningsAggregate = await this.prisma.growthCommissionLog.aggregate({
       where: {
-        marketerId: marketer.id,
+        marketerId: marketer.id, // 🔒 Kept secure to prevent sub-marketer data leakages
         createdAt: { gte: startOfMonth }
       },
       _sum: {
-        marketingSplitPaid: true // Correct schema field resolved from compiler error logs
+        marketingSplitPaid: true 
       },
       _count: {
-        _all: true // Standard safe aggregate method for counting entries
+        _all: true 
       }
     });
 
-    // 5. Build Recent Transactions Component Stack
+    // 5. Build Recent Transactions Component Stack—ISOLATED strictly to this individual
     const recentTransactionsLogs = await this.prisma.growthCommissionLog.findMany({
-      where: { marketerId: marketer.id },
+      where: { marketerId: marketer.id }, // 🔒 Secure personal pipeline ledger visibility
       take: 5,
       orderBy: { createdAt: 'desc' },
     });
 
-    // Extract an easily readable store lookup map to resolve company titles without a direct object model join
-    const vendorMap = new Map(vendors.map(v => [v.id, v.storeName]));
+    // Extract store lookup map from team data to resolve titles quickly
+    const vendorMap = new Map(teamVendors.map(v => [v.id, v.storeName]));
 
     // Map DB logs cleanly onto matching parameters expected by your Next.js UI structure
     const recentTransactions = recentTransactionsLogs.map((log, idx) => {
@@ -85,14 +88,14 @@ export class GrowthDashboardService {
       };
     });
 
-    // 6. Map Vendor Grid overview metrics utilizing storeName properties
-    const vendorOverviewList = vendors.slice(0, 5).map(v => {
+    // 6. Map Shared Vendor Grid overview list (Showing the 5 most recent team onboardings)
+    const vendorOverviewList = teamVendors.slice(0, 5).map(v => {
       let computedStatus = 'Pending';
       if (v._count.products >= 5) computedStatus = 'Active';
       if (v._count.products === 0) computedStatus = 'Inactive';
 
       return {
-        name: v.storeName, // Correct schema property verified by compiler log
+        name: v.storeName, 
         status: computedStatus,
         items: v._count.products,
         sales: v.orders.length,
@@ -109,7 +112,8 @@ export class GrowthDashboardService {
     return {
       referralParameters: {
         teamCode: marketer.teamCode,
-        referralUrl: `https://Shopaviore.store/register?ref=${marketer.teamCode}`
+        // 🎯 FIX: Links now output the unique sequential tag string (e.g. ref=TEAM_IO01) 
+        referralUrl: `https://shopaviore.store/register-vendor?ref=${marketer.trackingTag || marketer.teamCode}`
       },
       vacationGoal: {
         completedSales: totalSalesCompleted,
@@ -122,9 +126,9 @@ export class GrowthDashboardService {
         nextPayoutWindow: '12 Jun 2026'
       },
       statsGrid: [
-        { title: 'Total Vendors Referred', value: totalVendorsReferred.toString(), subtext: 'All time' },
+        { title: 'Total Vendors Referred', value: totalVendorsReferred.toString(), subtext: 'Team Volume' },
         { title: 'Active Vendors', value: activeVendorsCount.toString(), subtext: 'Met 5+ product rule' },
-        { title: 'Successful Sales', value: totalSalesCompleted.toString(), subtext: 'All time' },
+        { title: 'Successful Sales', value: totalSalesCompleted.toString(), subtext: 'Team Volume' },
         { 
           title: 'Total Earnings (This Month)', 
           value: `₦${totalMonthEarnings.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`, 

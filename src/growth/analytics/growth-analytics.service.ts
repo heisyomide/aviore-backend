@@ -27,49 +27,25 @@ export class GrowthAnalyticsService {
       if (endDate) dateFilter.createdAt.lte = new Date(endDate);
     }
 
-    // 2. Fetch the cluster data scope based on the requesting user's authorization tier
-    let trackingRoster: any[] = [];
-
-    if (currentOperator.role === 'HEAD') {
-      // If the caller is a HEAD node, retrieve all active operators operating under the same team token
-      trackingRoster = await this.prisma.marketer.findMany({
-        where: { teamCode: currentOperator.teamCode },
-        include: {
-          vendors: {
-            where: dateFilter,
-            include: {
-              // Assuming your schema traces orders through vendors to capture gross volumes
-              orders: {
-                where: { status: 'DELIVERED', ...dateFilter },
-              },
+    // 2. FETCH ENTIRE CLUSTER SCOPE FOR BOTH HEAD AND SUB_MARKETERS
+    // Both roles now fetch all marketers sharing the exact same teamCode cluster
+    const trackingRoster = await this.prisma.marketer.findMany({
+      where: { teamCode: currentOperator.teamCode },
+      orderBy: { createdAt: 'asc' }, // Keeps sorting uniform for the matrix grid
+      include: {
+        vendors: {
+          where: dateFilter,
+          include: {
+            orders: {
+              where: { status: 'DELIVERED', ...dateFilter },
             },
-          },
-          commissionLogs: {
-            where: dateFilter,
           },
         },
-      });
-    } else {
-      // If the caller is a standard SUB_MARKETER, isolate the query entirely to their single data pipeline
-      trackingRoster = [
-        await this.prisma.marketer.findUnique({
-          where: { id: marketerId },
-          include: {
-            vendors: {
-              where: dateFilter,
-              include: {
-                orders: {
-                  where: { status: 'DELIVERED', ...dateFilter },
-                },
-              },
-            },
-            commissionLogs: {
-              where: dateFilter,
-            },
-          },
-        }),
-      ];
-    }
+        commissionLogs: {
+          where: dateFilter,
+        },
+      },
+    });
 
     // 3. Normalize database fields into the exact array schema required by app/growth/analytics/page.tsx
     const teamMembersBreakdown = trackingRoster.map((operator) => {
@@ -117,6 +93,12 @@ export class GrowthAnalyticsService {
     return {
       success: true,
       data: {
+        // Pass down the current logged in user's profile info to easily enforce frontend permission guards
+        currentOperator: {
+          id: currentOperator.id,
+          role: currentOperator.role,
+          teamCode: currentOperator.teamCode,
+        },
         teamMembersBreakdown,
       },
     };

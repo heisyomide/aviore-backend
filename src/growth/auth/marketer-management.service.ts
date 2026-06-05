@@ -21,42 +21,58 @@ export class MarketerManagementService {
   /**
    * Allows an existing HEAD marketer to spawn a SUB_MARKETER inside their own team cluster.
    */
-  async createSubMarketer(creatorId: string, creatorTeamCode: string, name: string) {
-    // 1. Generate the raw passcode
-    const rawPasscode = this.generateSecurePasscode();
-    
-    // 2. Hash it before it hits your Neon PostgreSQL layer
-    const saltRounds = 10;
-    const passcodeHash = await bcrypt.hash(rawPasscode, saltRounds);
+ async createSubMarketer(creatorId: string, creatorTeamCode: string, name: string) {
+  // 1. Generate the raw passcode
+  const rawPasscode = this.generateSecurePasscode();
+  
+  // 2. Hash it before it hits your Neon PostgreSQL layer
+  const saltRounds = 10;
+  const passcodeHash = await bcrypt.hash(rawPasscode, saltRounds);
 
-    try {
-      // 3. Save the new operator node into the schema layout
-      const newMarketer = await this.prisma.marketer.create({
-        data: {
-          name,
-          teamCode: creatorTeamCode, // Forces sub-marketers into the creator's team cluster
-          passcodeHash,
-          role: 'SUB_MARKETER',
-          status: 'ACTIVE',
-          wallet: { create: { balance: 0.0 } }, // Instantly spins up their ledger row
-        },
-      });
+  try {
+    // 3. Count existing sub-marketers in this specific team cluster to get the next index
+    const subMarketerCount = await this.prisma.marketer.count({
+      where: { 
+        teamCode: creatorTeamCode,
+        role: 'SUB_MARKETER'
+      }
+    });
 
-      // 4. Return the plain text passcode ONLY HERE so the creator can copy it
-      return {
-        message: 'Sub-marketer account successfully created.',
+    // 4. Calculate sequential index (e.g., count 0 becomes "01", count 1 becomes "02")
+    const nextSequence = String(subMarketerCount + 1).padStart(2, '0');
+    const uniqueTrackingTag = `${creatorTeamCode}${nextSequence}`; // e.g., "TEAM_IO01"
+
+    // 5. Save the new operator node into the schema layout
+    const newMarketer = await this.prisma.marketer.create({
+      data: {
+        name,
+        teamCode: creatorTeamCode, // Keeps them inside the main structural group cluster
+        trackingTag: uniqueTrackingTag, // 🎯 The explicit individual referral tracking tag
+        passcodeHash,
+        role: 'SUB_MARKETER',
+        status: 'ACTIVE',
+        wallet: { create: { balance: 0.0 } }, // Instantly spins up their ledger row
+      },
+    });
+
+    // 6. Return structured precisely with a success flag and data wrapper matching frontend expectations
+    return {
+      success: true,
+      message: 'Sub-marketer account successfully created.',
+      data: {
         id: newMarketer.id,
         name: newMarketer.name,
-        teamCode: newMarketer.teamCode,
+        code: newMarketer.trackingTag, // 🎯 Pass the sequential tag "TEAM_IO01" to the front-end display!
         role: newMarketer.role,
-        generatedPasscode: rawPasscode, // 💡 Show this on the frontend layout once!
-      };
-    } catch (error) {
-      // Catch Prisma unique constraint violations (e.g. rare passcode collision in same team)
-      if (error.code === 'P2002') {
-        throw new ConflictException('A signature conflict occurred. Please submit the request again.');
-      }
-      throw error;
+        passcode: rawPasscode, // Show this on the frontend layout once!
+      },
+    };
+  } catch (error) {
+    // Catch Prisma unique constraint violations
+    if (error.code === 'P2002') {
+      throw new ConflictException('A tracking signature conflict occurred. Please submit the request again.');
     }
+    throw error;
   }
+}
 }

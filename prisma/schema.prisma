@@ -981,6 +981,7 @@ model Marketer {
   id           String         @id @default(uuid())
   name         String
   teamCode     String         // e.g., "TEAM_IO" -> Groups clusters together
+  trackingTag  String         @unique // 🎯 NEW: e.g., "TEAM_IO01", "TEAM_IO02". Unique for links!
   passcodeHash String         // Secure bcrypt/argon2 hash of the 6-digit passcode
   role         MarketerRole   @default(SUB_MARKETER)
   status       MarketerStatus @default(ACTIVE)
@@ -992,7 +993,7 @@ model Marketer {
 
   // Relations
   wallet         MarketingWallet?
-  settings       MarketerSettings?       // Appended configurations relation link
+  settings       MarketerSettings?       
   vendors        Vendor[]                @relation("MarketerToVendor")
   payouts        GrowthPayoutRequest[]
   commissionLogs GrowthCommissionLog[]
@@ -1000,8 +1001,9 @@ model Marketer {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  @@unique([teamCode, passcodeHash]) // Stops passcode collisions within the same team node cluster
+  @@unique([teamCode, passcodeHash]) 
   @@index([teamCode])
+  @@index([trackingTag]) // 🎯 Indexed for lightning-fast referral signups
 }
 
 model MarketerSettings {

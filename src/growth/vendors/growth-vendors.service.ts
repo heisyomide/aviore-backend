@@ -1,9 +1,21 @@
 // src/growth/vendors/growth-vendors.service.ts
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service'; 
 import { GetVendorsQueryDto, VendorStatusFilter } from './dto/get-vendors-query.dto';
-// IMPORT NOTE: Import your actual auto-generated OrderStatus enum from prisma client
-import { OrderStatus } from '@prisma/client'; 
+import { OrderStatus, Prisma, VendorStatus } from '@prisma/client'; 
+
+export interface FormattedVendorPayload {
+  id: string;
+  storeName: string;
+  ownerName: string;
+  status: string;
+  productsCount: number;
+  successfulSales: number;
+  totalRevenue: number;
+  joinedDate: string;
+  email: string;
+  broughtInByMarketer: string; // 🎯 Tracks who brought the vendor in on the shared view
+}
 
 @Injectable()
 export class GrowthVendorsService {
@@ -14,97 +26,152 @@ export class GrowthVendorsService {
   async fetchOperatorCohort(operatorId: string, query: GetVendorsQueryDto) {
     const { search, status } = query;
 
-    const whereCondition: any = {
-      marketerId: operatorId, 
+    // 1. Resolve the logged-in marketer's profile to extract their teamCode cluster
+    const currentOperator = await this.prisma.marketer.findUnique({
+      where: { id: operatorId },
+      select: { teamCode: true }
+    });
+
+    if (!currentOperator) {
+      throw new NotFoundException('Growth marketer identity context not found.');
+    }
+
+    const clusterTeamCode = currentOperator.teamCode;
+
+    // 2. Build filters targeting the ENTIRE teamCode so everyone sees the same data pool
+    const whereCondition: Prisma.VendorWhereInput = {
+      marketer: {
+        teamCode: clusterTeamCode // 🎯 Shared View: Queries metrics for the whole team cluster
+      }
     };
 
     if (search) {
       whereCondition.OR = [
         { storeName: { contains: search, mode: 'insensitive' } },
         { id: { contains: search, mode: 'insensitive' } },
-        // Fallback robust relation search
         { user: { email: { contains: search, mode: 'insensitive' } } }
       ];
     }
 
     if (status && status !== VendorStatusFilter.ALL) {
-      whereCondition.status = status;
+      whereCondition.status = status as unknown as VendorStatus;
     }
 
     try {
-      const vendorsRaw = await this.prisma.vendor.findMany({
-        where: whereCondition,
-        select: {
-          id: true,
-          storeName: true,
-          status: true,
-          createdAt: true, 
-          user: {
-            select: {
-              email: true,
-              // If your user model has firstName/lastName instead of 'name', 
-              // Prisma won't crash here because we are asking for fields that definitely exist.
-              // We'll dynamically resolve the full name string in the mapping phase.
-            }
-          },
-          _count: {
-            select: { products: true }
-          },
-          orders: {
-            // FIXED: Using the native OrderStatus enum object rather than a string literal
-            where: { status: OrderStatus.DELIVERED }, 
-            select: { totalAmount: true }
+      // Create explicit schema select object to prevent TypeScript array inference stripping
+      const vendorSelection = {
+        id: true,
+        storeName: true,
+        status: true,
+        createdAt: true, 
+        user: {
+          select: {
+            email: true,
+            firstName: true, // 🎯 Keep this
+            lastName: true,  // 🎯 Keep this
+            // ❌ Removed 'name' to resolve compilation error TS2353
           }
         },
-        orderBy: { createdAt: 'desc' }, 
-      });
+        // 🎯 Include the marketer relation to track performance on the shared table
+        marketer: {
+          select: {
+            name: true,
+            trackingTag: true
+          }
+        },
+        _count: {
+          select: { products: true }
+        },
+        orders: {
+          where: { status: OrderStatus.DELIVERED }, 
+          select: { totalAmount: true }
+        }
+      } satisfies Prisma.VendorSelect;
 
-      const formattedVendors = vendorsRaw.map((v: any) => {
+      // 3. Concurrent database retrieval execution
+      const [vendorsRaw, clusterVendorCounts] = await Promise.all([
+        // Query A: Fetch rows for the shared table list
+        this.prisma.vendor.findMany({
+          where: whereCondition,
+          select: vendorSelection,
+          orderBy: { createdAt: 'desc' }, 
+        }),
+
+        // Query B: Fetch metrics count for the entire team cluster
+        this.prisma.vendor.findMany({
+          where: { 
+            marketer: { teamCode: clusterTeamCode } 
+          },
+          select: {
+            _count: { select: { products: true } }
+          }
+        })
+      ]);
+
+      // 4. Map database fields to clean frontend payloads
+      const formattedVendors: FormattedVendorPayload[] = vendorsRaw.map((v) => {
         const productsCount = v._count?.products ?? 0;
         const successfulSales = v.orders?.length ?? 0;
-        const totalRevenue = v.orders?.reduce((sum: number, order: any) => sum + (order.totalAmount ?? 0), 0) ?? 0;
+        
+        // Unwrapping Prisma Decimal types safely into native numbers
+        const totalRevenue = v.orders?.reduce((sum, order) => {
+          return sum + this.safeUnwrapDecimal(order.totalAmount);
+        }, 0) ?? 0;
 
-        // Safely extract a name placeholder or parts if 'name' is absent
         const ownerEmailPrefix = v.user?.email ? v.user.email.split('@')[0] : 'Vendor Partner';
-        const rawUser = v.user as any;
-        const fallbackName = rawUser?.firstName || rawUser?.lastName 
-          ? `${rawUser?.firstName ?? ''} ${rawUser?.lastName ?? ''}`.trim()
+        
+        // Dynamically rebuild full name payload from existing database fields
+        const fallbackName = v.user?.firstName || v.user?.lastName 
+          ? `${v.user?.firstName ?? ''} ${v.user?.lastName ?? ''}`.trim()
           : ownerEmailPrefix;
+
+        // Displays who brought the vendor in using their unique tracking tag/name
+        const creditLabel = v.marketer 
+          ? `${v.marketer.name} (${v.marketer.trackingTag})` 
+          : 'Direct Team Registration';
 
         return {
           id: v.id,
-          storeName: v.storeName,
-          ownerName: rawUser?.name || fallbackName,
+          storeName: v.storeName || 'AVI_VND_STORE',
+          ownerName: fallbackName, // 🎯 Uses compiled name string
           status: v.status, 
           productsCount,
           successfulSales,
           totalRevenue,
-          joinedDate: new Date(v.createdAt).toLocaleDateString('en-GB', {
+          joinedDate: v.createdAt.toLocaleDateString('en-GB', {
             day: 'numeric',
             month: 'short',
             year: 'numeric'
           }),
           email: v.user?.email ?? 'N/A',
+          broughtInByMarketer: creditLabel // 🎯 performance tracking visibility
         };
       });
 
-      const allVendorsForMetrics = await this.prisma.vendor.findMany({
-        where: { marketerId: operatorId },
-        select: {
-          _count: { select: { products: true } }
-        }
-      });
+      // 5. Compute team metrics summary utilizing the single-pass optimized loop
+      let active = 0;
+      let pending = 0;
+      let stalled = 0;
 
-      const metricsSummary = {
-        total: allVendorsForMetrics.length,
-        active: allVendorsForMetrics.filter((v: any) => (v._count?.products ?? 0) >= 5).length,
-        pending: allVendorsForMetrics.filter((v: any) => (v._count?.products ?? 0) < 5 && (v._count?.products ?? 0) > 0).length,
-        stalled: allVendorsForMetrics.filter((v: any) => (v._count?.products ?? 0) === 0).length,
-      };
+      for (let i = 0; i < clusterVendorCounts.length; i++) {
+        const count = clusterVendorCounts[i]._count.products;
+        if (count >= 5) {
+          active++;
+        } else if (count > 0) {
+          pending++;
+        } else {
+          stalled++;
+        }
+      }
 
       return {
         success: true,
-        metrics: metricsSummary,
+        metrics: {
+          total: clusterVendorCounts.length,
+          active,
+          pending,
+          stalled
+        },
         data: formattedVendors,
       };
 
@@ -112,5 +179,17 @@ export class GrowthVendorsService {
       this.logger.error(`Failed to retrieve growth network cohort parameters: ${error?.message || error}`);
       throw error;
     }
+  }
+
+  /**
+   * Safe Type Guard processing helper that extracts standard numeric primitives 
+   * out of arbitrary inputs or Prisma decimal instances.
+   */
+  private safeUnwrapDecimal(value: any): number {
+    if (!value) return 0;
+    if (typeof value.toNumber === 'function') {
+      return value.toNumber();
+    }
+    return Number(value) || 0;
   }
 }
