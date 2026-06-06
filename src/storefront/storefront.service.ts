@@ -320,7 +320,7 @@ async getBestSellers(limit: number = 10) {
   const topSellingData = await this.prisma.orderItem.groupBy({
     by: ['productId'],
     _sum: {
-      quantity: true, // We count total units sold, not just number of orders
+      quantity: true, 
     },
     orderBy: {
       _sum: {
@@ -330,19 +330,28 @@ async getBestSellers(limit: number = 10) {
     take: limit,
   });
 
-  // Extract the IDs
   const productIds = topSellingData.map((item) => item.productId);
 
-  // 🚀 2. Fetch the actual product details for the storefront
+  // 🚀 2. Fetch the actual product details with PRICING & INVENTORY data
   return this.prisma.product.findMany({
     where: {
       id: { in: productIds },
-      isActive: true,    // Fix: Your schema uses isActive
-      isDeleted: false,  // Fix: Your schema uses isDeleted
+      isActive: true,    
+      isDeleted: false, // 👈 Keep this! It belongs here on the Product model
     },
     include: {
       images: {
-        take: 1, // Usually just need the main image for the listing
+        take: 1, 
+      },
+      variants: {
+        // 🎯 FIXED: Removed 'where: { isDeleted: false }' because variants 
+        // don't track a soft-deletion flag natively in your schema.
+        select: {
+          id: true,
+          price: true,
+          sku: true,
+          stock: true, 
+        }
       },
       vendor: {
         select: {
