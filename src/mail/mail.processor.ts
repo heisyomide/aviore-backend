@@ -37,9 +37,9 @@ export class MailProcessor {
   );
 
   // =========================
-  // BRAND SYSTEM
+  // BRAND SYSTEM (CINEMATIC PREMIUM)
   // =========================
-  private readonly brandColor = '#ff5a1f';
+  private readonly brandColor = '#A4143D'; // Updated to signature deep crimson
   private readonly bg = '#050505';
   private readonly surface = '#0d0d0d';
   private readonly surface2 = '#151515';
@@ -174,7 +174,7 @@ export class MailProcessor {
               highlight: 'Captured',
               description: 'A high-value marketplace transaction has been successfully routed and logged.',
               buttonText: 'Manage Order',
-              buttonLink: `${process.env.FRONTEND_URL }/vendor/orders`,
+              buttonLink: `${process.env.FRONTEND_URL}/vendor/orders`,
             })}
 
             ${this.statGrid([
@@ -208,7 +208,7 @@ export class MailProcessor {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       </head>
-      <body style="margin:0; padding:0; background-color:${this.bg}; font-family:${this.fontSans};">
+      <body style="margin:0; padding:0; background-color:${this.bg}; font-family:${this.fontSans}; -webkit-font-smoothing:antialiased;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${this.bg};">
           <tr>
             <td align="center" style="padding:40px 14px;">
@@ -220,12 +220,12 @@ export class MailProcessor {
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td align="left">
-                          <div style="color:white; font-size:24px; letter-spacing:8px; font-family:${this.fontSerif}; font-weight:300;">
+                          <div style="color:white; font-size:22px; letter-spacing:8px; font-family:${this.fontSerif}; font-weight:300;">
                             AVIORÈ
                           </div>
                         </td>
                         <td align="right">
-                          <div style="color:${this.muted}; font-size:10px; text-transform:uppercase; letter-spacing:2px; font-weight:500;">
+                          <div style="color:${this.muted}; font-size:9px; text-transform:uppercase; letter-spacing:2px; font-weight:600;">
                             E-Commerce System
                           </div>
                         </td>
@@ -244,10 +244,10 @@ export class MailProcessor {
                 <!-- FOOTER -->
                 <tr>
                   <td style="padding:40px; text-align:center; background-color:#050505; border-top:1px solid ${this.border};">
-                    <p style="margin:0 0 12px 0; color:#5f5f5f; font-size:9px; letter-spacing:3px; text-transform:uppercase; font-weight:600;">
+                    <p style="margin:0 0 12px 0; color:#444444; font-size:9px; letter-spacing:3px; text-transform:uppercase; font-weight:600;">
                       Lagos • Madrid • New York
                     </p>
-                    <p style="margin:0; color:#333333; font-size:9px; letter-spacing:1px; text-transform:uppercase;">
+                    <p style="margin:0; color:#2c2c2c; font-size:9px; letter-spacing:1px; text-transform:uppercase; font-weight:500;">
                       © ${new Date().getFullYear()} AVIORÈ Collective. All rights reserved.
                     </p>
                   </td>
@@ -282,19 +282,19 @@ export class MailProcessor {
   }): string {
     return `
       <div style="padding:60px 40px 40px 40px; background: linear-gradient(180deg, #121212 0%, ${this.surface} 100%); border-bottom:1px solid ${this.border}; text-align:left;">
-        <div style="color:${this.brandColor}; font-size:11px; text-transform:uppercase; letter-spacing:3px; margin-bottom:20px; font-weight:700;">
+        <div style="color:${this.brandColor}; font-size:10px; text-transform:uppercase; letter-spacing:3px; margin-bottom:20px; font-weight:700;">
           ${eyebrow}
         </div>
-        <div style="color:white; font-size:52px; line-height:0.95; font-family:${this.fontSerif}; font-weight:300; margin-bottom:4px; letter-spacing:-1px;">
+        <div style="color:white; font-size:48px; line-height:0.95; font-family:${this.fontSerif}; font-weight:300; margin-bottom:4px; letter-spacing:-1px; text-transform:uppercase; font-style:italic;">
           ${title}
         </div>
-        <div style="color:#505050; font-size:52px; line-height:1; font-family:${this.fontSerif}; font-weight:300; margin-bottom:24px; letter-spacing:-1px;">
+        <div style="color:#404040; font-size:48px; line-height:1; font-family:${this.fontSerif}; font-weight:300; margin-bottom:24px; letter-spacing:-1px; text-transform:uppercase; font-style:italic;">
           ${highlight}
         </div>
-        <p style="max-width:460px; color:#a0a0a0; font-size:15px; line-height:1.7; margin:0 0 35px 0; font-weight:300;">
+        <p style="max-width:460px; color:#a0a0a0; font-size:14px; line-height:1.7; margin:0 0 35px 0; font-weight:300;">
           ${description}
         </p>
-        <a href="${buttonLink}" style="display:inline-block; padding:16px 36px; background-color:#ffffff; color:#000000; text-decoration:none; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:2px; border-radius:4px;">
+        <a href="${buttonLink}" style="display:inline-block; padding:16px 36px; background-color:${this.brandColor}; color:#ffffff; text-decoration:none; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:2px; border-radius:4px; border:1px solid rgba(255,255,255,0.1); transition: all 0.3s ease;">
           ${buttonText}
         </a>
       </div>
@@ -312,10 +312,10 @@ export class MailProcessor {
       .map(
         (stat) => `
       <td style="width:${100 / stats.length}%; padding:24px; border-radius:12px; background-color:${this.surface2}; border:1px solid ${this.border};">
-        <div style="color:${stat.accent ? this.brandColor : this.text}; font-size:26px; font-weight:700; margin-bottom:6px; font-family:${this.fontSans}; letter-spacing:-0.5px;">
+        <div style="color:${stat.accent ? this.brandColor : this.text}; font-size:24px; font-weight:800; font-style:italic; margin-bottom:6px; font-family:${this.fontSans}; letter-spacing:-0.5px; text-transform:uppercase;">
           ${stat.value}
         </div>
-        <div style="color:${this.muted}; font-size:10px; text-transform:uppercase; letter-spacing:1.5px; font-weight:500;">
+        <div style="color:${this.muted}; font-size:9px; text-transform:uppercase; letter-spacing:1.5px; font-weight:600;">
           ${stat.label}
         </div>
       </td>
@@ -337,10 +337,10 @@ export class MailProcessor {
       .map(
         (item, index) => `
       <div style="padding-top:${index === 0 ? '0' : '18px'}; padding-bottom:18px; ${index === items.length - 1 ? '' : `border-bottom:1px solid ${this.border};`}">
-        <div style="color:${this.muted}; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:6px; font-weight:500;">
+        <div style="color:${this.muted}; font-size:9px; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:6px; font-weight:600;">
           ${item.label}
         </div>
-        <div style="color:white; font-size:15px; line-height:1.5; font-family:monospace; color:#e0e0e0;">
+        <div style="color:#e0e0e0; font-size:14px; line-height:1.5; font-family:monospace; font-weight:500;">
           ${item.value}
         </div>
       </div>
@@ -362,13 +362,13 @@ export class MailProcessor {
       .map(
         (item) => `
       <td align="center">
-        <div style="color:#e0e0e0; font-size:11px; letter-spacing:2px; text-transform:uppercase; font-weight:500;">
+        <div style="color:#c0c0c0; font-size:10px; letter-spacing:2px; text-transform:uppercase; font-weight:600;">
           ${item}
         </div>
       </td>
     `,
       )
-      .join('<td style="color:#333333; font-size:14px; padding:0 10px;">•</td>');
+      .join('<td style="color:#2a2a2a; font-size:12px; padding:0 10px;">•</td>');
 
     return `
       <div style="padding:10px 40px 40px 40px;">
@@ -379,20 +379,19 @@ export class MailProcessor {
     `;
   }
 
-
   @Get('debug-mail-direct')
-async testDirectMail() {
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  try {
-    const data = await resend.emails.send({
-      from: process.env.OFFICIAL_EMAIL_SENDER || 'onboarding@resend.dev',
-      to: 'YOUR_PERSONAL_EMAIL@gmail.com', // Put your email here
-      subject: '🚨 Direct Render Production Test',
-      html: '<h1>If you see this, the queue is the problem. If you dont, Resend/Domain is the problem.</h1>',
-    });
-    return { success: true, data };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  async testDirectMail() {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    try {
+      const data = await resend.emails.send({
+        from: process.env.OFFICIAL_EMAIL_SENDER || 'onboarding@resend.dev',
+        to: 'YOUR_PERSONAL_EMAIL@gmail.com',
+        subject: '🚨 Direct Render Production Test',
+        html: '<h1>If you see this, the queue is the problem. If you dont, Resend/Domain is the problem.</h1>',
+      });
+      return { success: true, data };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
   }
-}
 }
