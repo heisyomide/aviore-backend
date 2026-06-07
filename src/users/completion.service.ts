@@ -104,21 +104,21 @@ export class CompletionService {
         title: 'Configure Store URL Slug',
         description: 'Set up your unique web marketplace handle to receive traffic.',
         completed: !!vendor.slug && vendor.slug.trim().length > 0,
-        route: '/vendor/settings/profile',
+        route: '/vendor/settings',
       },
       {
         id: 'vendor-bank',
         title: 'Setup Payout Treasury Bank',
         description: 'Provide your payout bank name and account number for balance clearance.',
         completed: !!(vendor.bankName && vendor.accountNumber),
-        route: '/vendor/settings/bank',
+        route: '/vendor/settings',
       },
       {
         id: 'vendor-description',
         title: 'Write Store Description',
         description: 'Add a summary details description of your brand niche for buyer confidence.',
         completed: !!vendor.description && vendor.description.trim().length > 0,
-        route: '/vendor/settings/profile',
+        route: '/vendor/settings',
       },
     ];
 
