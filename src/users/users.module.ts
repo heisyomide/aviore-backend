@@ -6,11 +6,12 @@ import { UsersService } from './users.service';
 import { VendorModule } from 'src/vendor/vendor.module';
 import { CompletionController } from './completion.controller';
 import { CompletionService } from './completion.service';
+import { ReferralModule } from 'src/referral/referral.module';
 // import { PrismaModule } from 'src/prisma/prisma.module'; // Uncomment if needed for database connectivity
 
 @Module({
   imports: [
-    VendorModule,
+    VendorModule, ReferralModule,
     
   ],
   controllers: [

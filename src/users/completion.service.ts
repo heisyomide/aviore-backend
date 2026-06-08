@@ -1,12 +1,18 @@
 // src/users/completion.service.ts
 
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma.service'; // Adjust path based on your module setup
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma.service'; 
+import { ReferralService } from '../referral/referral.service'; // Adjust path based on your module setup
 import { CompletionEngineResponse, CompletionTask } from './interfaces/completion.interface';
 
 @Injectable()
 export class CompletionService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger('CompletionService');
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly referralService: ReferralService, // ◄ Inject your referral engine here
+  ) {}
 
   /**
    * CUSTOMER COMPLETION TRACK
@@ -57,6 +63,21 @@ export class CompletionService {
       },
     ];
 
+    // Determine core status
+    const isFullyActive = isProfileComplete && hasAddress;
+
+    // 🚀 ATOMIC REFERRAL ACTIVATION ENGINE TRACE
+    // If they have completed both requirements, pass their ID downstream to check for referral logs
+    if (isFullyActive) {
+      try {
+        await this.referralService.processReferralQualification(userId);
+      } catch (error) {
+        // We catch errors safely so that a minor log update calculation failure 
+        // never blocks or crashes the user's main dashboard layout payload engine
+        this.logger.error(`⚠️ Referral qualification process deferred for user ${userId}:`, error.message);
+      }
+    }
+
     // Growth Guidance Activation: Triggers once core configuration is complete but first purchase is pending
     if (isProfileComplete && hasAddress && !hasPlacedOrder) {
       tasks.push({
@@ -74,7 +95,7 @@ export class CompletionService {
 
     return {
       completionPercentage,
-      isFullyActive: isProfileComplete && hasAddress,
+      isFullyActive,
       tasks,
     };
   }

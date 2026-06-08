@@ -52,31 +52,70 @@ export class ReferralService {
   /**
    * Registers a brand-new user down the referral logging network chain during onboarding.
    */
-  async handleUserSignupReferral(referredUserId: string, codeUsed: string | null, ip: string, fingerprint: string | null): Promise<void> {
-    if (!codeUsed) return;
+  /**
+   * Registers a brand-new user down the referral logging network chain during onboarding.
+   */
+  async handleUserSignupReferral(
+    referredUserId: string, 
+    codeUsed: string | null, 
+    ip: string, 
+    fingerprint: string | null
+  ): Promise<void> {
+    // 1. Structural Exit: Terminate immediately if no token parameter was extracted from the request
+    if (!codeUsed) {
+      this.logger.log(`[Referral Engine] No referral code supplied for onboarding User ID: ${referredUserId}`);
+      return;
+    }
 
     const sanitizedCode = codeUsed.trim().toUpperCase();
-    const referrer = await this.prisma.user.findUnique({ where: { referralCode: sanitizedCode } });
+    this.logger.log(`[Referral Engine] Processing link token "${sanitizedCode}" for User ID: ${referredUserId}`);
 
-    // Catch invalid referral code configurations cleanly without causing validation layer crashes
-    if (!referrer) return; 
+    // 2. Database Lookup: Locate the target parent account
+    const referrer = await this.prisma.user.findUnique({ 
+      where: { referralCode: sanitizedCode } 
+    });
 
-    // Explicitly reject self-referral attempts immediately before entering transactional spaces
+    // 💥 FIX: Clear system visibility alert when a referral code can't be matched in your database
+    if (!referrer) {
+      this.logger.error(
+        `❌ REFERRAL LINK FAILURE: Token "${sanitizedCode}" does not exist in the system. Skipping graph mutations.`
+      );
+      return; 
+    } 
+
+    // 3. Security Guard: Explicitly reject self-referral loop exploits
     if (referrer.id === referredUserId) {
-      this.logger.warn(`🛑 SECURE EXPLOIT BLOCK: User ${referredUserId} attempted to use their own referral code.`);
+      this.logger.warn(
+        `🛑 SECURE EXPLOIT BLOCK: User ${referredUserId} attempted to use their own referral code.`
+      );
       throw new BadRequestException('Invalid Operation: Self-referral loops are prohibited.');
     }
 
+    // 4. Security Guard: Prevent processing if user is already linked (Idempotency Check)
+    const targetUser = await this.prisma.user.findUnique({
+      where: { id: referredUserId },
+      select: { referredById: true }
+    });
+
+    if (targetUser?.referredById) {
+      this.logger.warn(
+        `⚠️ IDEMPOTENCY GUARD: User ${referredUserId} is already assigned to a referrer node (${targetUser.referredById}).`
+      );
+      return;
+    }
+
+    // 5. Telemetry Evaluation: Check for device farming / velocity indicators
     const checkFraud = await this.evaluationSecurityFingerprint(ip, fingerprint);
 
+    // 6. Transaction Pipeline: Execute graph mutations atomically
     await this.prisma.$transaction(async (tx) => {
-      // 1. Link parent user directly inside the core graph layout
+      // Link parent user directly inside the core graph layout
       await tx.user.update({
         where: { id: referredUserId },
         data: { referredById: referrer.id },
       });
 
-      // 2. Commit immutable ledger entry audit logs for device behavior tracking
+      // Commit immutable ledger entry audit logs for behavioral tracking
       await tx.referralLog.create({
         data: {
           referrerId: referrer.id,
@@ -90,11 +129,16 @@ export class ReferralService {
       });
     });
 
+    this.logger.log(
+      `🎯 REFERRAL ENGINE COMPLETED: Linked Invite User [${referredUserId}] directly to Parent Referrer [${referrer.id}]`
+    );
+
     if (checkFraud) {
-      this.logger.warn(`🚨 FRAUD TRAIL LOGGED: Hardware signature [${fingerprint || 'UNKNOWN'}] triggered risk flags.`);
+      this.logger.warn(
+        `🚨 FRAUD TRAIL LOGGED: Hardware signature [${fingerprint || 'UNKNOWN'}] or IP [${ip}] triggered velocity risk flags.`
+      );
     }
   }
-
   /**
    * Evaluates the qualification logic lifecycle status and handles campaign reward distributions cleanly.
    */
