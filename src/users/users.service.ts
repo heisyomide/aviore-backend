@@ -4,11 +4,14 @@ import * as bcrypt from 'bcrypt';
 import { CreateAddressDto } from './dto/create-address.dto';
 import { refreshToken } from 'firebase-admin/app';
 import * as crypto from 'crypto';
+import { CompletionService } from './completion.service';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService,
+private completionService: CompletionService,
+  ) {}
 
   // --- IDENTITY LOGIC ---
 async createUser(
@@ -260,10 +263,20 @@ async updateProfile(userId: string, data: { firstName?: string; lastName?: strin
   const user = await this.prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new NotFoundException('User not found');
 
-  return this.prisma.user.update({
+  const updatedUser = await this.prisma.user.update({
     where: { id: userId },
     data,
   });
+
+  // 🚀 FORCE ONBOARDING EVALUATION ON DATA SHIFT
+  // This calculates if they are complete now and automatically flips the referral log!
+  try {
+    await this.completionService.calculateCustomerStatus(userId);
+  } catch (err: any) {
+    this.logger.error(`Deferred referral engine hook on profile change: ${err.message}`);
+  }
+
+  return updatedUser;
 }
 
 
@@ -370,18 +383,27 @@ async addAddress(userId: string, data: CreateAddressDto) {
   try {
     const count = await this.prisma.address.count({ where: { userId } });
     
-    return await this.prisma.address.create({
+    const newAddress = await this.prisma.address.create({
       data: {
         fullName: data.fullName,
         phoneNumber: data.phoneNumber,
         street: data.street,
         city: data.city,
         state: data.state,
-        postalCode: data.postalCode || "", // Ensures it's never null
+        postalCode: data.postalCode || "", 
         userId: userId,
-        isDefault: count === 0, // First one is default
+        isDefault: count === 0, 
       },
     });
+
+    // 🚀 FORCE ONBOARDING EVALUATION ON NEW ADDRESS SET
+    try {
+      await this.completionService.calculateCustomerStatus(userId);
+    } catch (err: any) {
+      this.logger.error(`Deferred referral engine hook on address insert: ${err.message}`);
+    }
+
+    return newAddress;
   } catch (error) {
     throw new BadRequestException("LOGISTICS_REGISTRY_FAILURE: Check identity fields.");
   }
