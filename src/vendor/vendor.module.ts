@@ -5,15 +5,17 @@ import { VendorService } from './vendor.service';
 import { PrismaService } from 'src/prisma.service';
 import { VendorInterceptor } from './vendor.interceptor';
 import { CloudinaryProvider } from 'src/common/cloudinary/cloudinary.provider';
-import { CouponsModule } from '../coupons/coupons.module'; // <--- 1. Import the Module
+import { CouponsModule } from '../coupons/coupons.module'; 
 import { PrismaModule } from 'src/prisma.module';
 import { ProductsModule } from 'src/products/products.module';
+import { GrowthModule } from '../growth/growth.module'; // ➕ 1. Import your GrowthModule wrapper
 
 @Module({
   imports: [
-    CouponsModule, // <--- 2. Add this to allow VendorController to use CouponService
+    CouponsModule, 
     PrismaModule,
     ProductsModule,
+    GrowthModule, // 👈 2. Add it here to inject PromotionService, CampaignService, and PromotionAnalyticsService
     MulterModule.registerAsync({
       useFactory: () => ({
         limits: {

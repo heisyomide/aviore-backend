@@ -643,6 +643,7 @@ model OrderItem {
   vendorEarning Decimal? @db.Decimal(12, 2)
 
   payoutStatus String? @default("PENDING")
+  commission         Decimal  @default(0.00) @db.Decimal(10, 2)
 
   couponId  String?
   coupon    Coupon?  @relation(fields: [couponId], references: [id])

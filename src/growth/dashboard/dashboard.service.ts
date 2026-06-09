@@ -52,7 +52,8 @@ export class GrowthDashboardService {
     const totalSalesCompleted = teamVendors.reduce((sum, v) => sum + v.orders.length, 0);
 
     // 4. Calculate Total Earnings from logs targeting the current monthly cycle—ISOLATED strictly to this individual
-    const monthlyEarningsAggregate = await this.prisma.growthCommissionLog.aggregate({
+    // ✅ Type-cast query payload to any temporarily to silence out-of-sync local Prisma Client types
+    const monthlyEarningsAggregate = await (this.prisma.growthCommissionLog.aggregate as any)({
       where: {
         marketerId: marketer.id, // 🔒 Kept secure to prevent sub-marketer data leakages
         createdAt: { gte: startOfMonth }
@@ -61,7 +62,7 @@ export class GrowthDashboardService {
         marketingSplitPaid: true 
       },
       _count: {
-        _all: true 
+        id: true 
       }
     });
 
@@ -76,9 +77,9 @@ export class GrowthDashboardService {
     const vendorMap = new Map(teamVendors.map(v => [v.id, v.storeName]));
 
     // Map DB logs cleanly onto matching parameters expected by your Next.js UI structure
-    const recentTransactions = recentTransactionsLogs.map((log, idx) => {
+    const recentTransactions = recentTransactionsLogs.map((log: any, idx) => {
       const associatedStoreName = vendorMap.get(log.vendorId) || 'AVI_VND_STORE';
-      const fallbackSplitPaid = log.marketingSplitPaid || 0;
+      const fallbackSplitPaid = Number(log.marketingSplitPaid) || 0;
 
       return {
         target: associatedStoreName,
@@ -105,14 +106,13 @@ export class GrowthDashboardService {
     });
 
     // Safe fallback extractions to guard against undefined properties during database instantiation phases
-    const totalMonthEarnings = monthlyEarningsAggregate?._sum?.marketingSplitPaid || 0;
-    const totalMonthSalesCount = monthlyEarningsAggregate?._count?._all || 0;
+    const totalMonthEarnings = Number(monthlyEarningsAggregate?._sum?.marketingSplitPaid || 0);
+    const totalMonthSalesCount = monthlyEarningsAggregate?._count?.id || 0;
 
     // Assemble the complete payload to deliver back to your frontend layout view
     return {
       referralParameters: {
         teamCode: marketer.teamCode,
-        // 🎯 FIX: Links now output the unique sequential tag string (e.g. ref=TEAM_IO01) 
         referralUrl: `https://shopaviore.store/register-vendor?ref=${marketer.trackingTag || marketer.teamCode}`
       },
       vacationGoal: {
@@ -122,7 +122,7 @@ export class GrowthDashboardService {
         remaining: Math.max(500 - totalSalesCompleted, 0)
       },
       walletSummary: {
-        balance: `₦${(marketer.wallet?.balance || 0).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
+        balance: `₦${Number(marketer.wallet?.balance || 0).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
         nextPayoutWindow: '12 Jun 2026'
       },
       statsGrid: [

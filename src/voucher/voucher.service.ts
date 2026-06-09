@@ -1,3 +1,4 @@
+// src/voucher/voucher.service.ts
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { VoucherStatus } from '@prisma/client';
@@ -38,8 +39,10 @@ export class VoucherService {
     }
 
     // 4. RULE 7: Minimum order value threshold verification
-    if (orderSubtotal < voucher.minimumOrder) {
-      throw new BadRequestException(`Order subtotal value must reach at least ₦${voucher.minimumOrder.toLocaleString()} to unlock this promotion.`);
+    // ✅ FIX: Wrap voucher.minimumOrder in Number() to allow primitive numeric comparisons
+    const minOrderValue = Number(voucher.minimumOrder);
+    if (orderSubtotal < minOrderValue) {
+      throw new BadRequestException(`Order subtotal value must reach at least ₦${minOrderValue.toLocaleString()} to unlock this promotion.`);
     }
 
     return voucher;
@@ -68,34 +71,32 @@ export class VoucherService {
   }
 
   async findUserVouchers(userId: string) {
-  const vouchers = await this.prisma.voucher.findMany({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
-  });
-  return vouchers.map((voucher) => {
-    const now = new Date();
-    const expiryDate = new Date(voucher.expiresAt);
-    const timeDiff = expiryDate.getTime() - now.getTime();
-    const daysRemaining = Math.ceil(
-      timeDiff / (1000 * 60 * 60 * 24)
-    );
-    let displayStatus = voucher.status;
-    if (
-      voucher.status === VoucherStatus.ACTIVE &&
-      now > expiryDate
-    ) {
-      displayStatus = VoucherStatus.EXPIRED;
-    }
-    return {
-      id: voucher.id,
-      code: voucher.code,
-      discountAmount: voucher.discountAmount,
-      minimumOrder: voucher.minimumOrder,
-      status: displayStatus,
-      expiresAt: voucher.expiresAt,
-      daysRemaining:
-        daysRemaining > 0 ? daysRemaining : 0,
-    };
-  });
-}
+    const vouchers = await this.prisma.voucher.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    
+    return vouchers.map((voucher) => {
+      const now = new Date();
+      const expiryDate = new Date(voucher.expiresAt);
+      const timeDiff = expiryDate.getTime() - now.getTime();
+      const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+      
+      let displayStatus = voucher.status;
+      if (voucher.status === VoucherStatus.ACTIVE && now > expiryDate) {
+        displayStatus = VoucherStatus.EXPIRED;
+      }
+      
+      return {
+        id: voucher.id,
+        code: voucher.code,
+        // ✅ FIX: Safely parse decimal values to numbers for standard UI integration layers
+        discountAmount: Number(voucher.discountAmount),
+        minimumOrder: Number(voucher.minimumOrder),
+        status: displayStatus,
+        expiresAt: voucher.expiresAt,
+        daysRemaining: daysRemaining > 0 ? daysRemaining : 0,
+      };
+    });
+  }
 }

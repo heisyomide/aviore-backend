@@ -23,6 +23,9 @@ import { VendorCreateProductDto  } from './dto/vendor-product.dto';
 import { OrderStatus } from '@prisma/client';
 import { CouponService } from "../coupons/coupons.service";
 import { ProductsService } from 'src/products/products.service';
+import { PromotionService } from 'src/coupons/promotion.service';
+import { CampaignService } from 'src/coupons/campaign.service';
+import { PromotionAnalyticsService } from 'src/coupons/analytics.service';
 
 @Controller('vendor')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -32,7 +35,10 @@ export class VendorController {
     private vendorService: VendorService,
     private readonly couponService: CouponService,
     private prisma: PrismaService,
-    private productsService: ProductsService
+    private productsService: ProductsService,
+    private readonly promotionService: PromotionService,
+    private readonly campaignService: CampaignService,
+    private readonly analyticsService: PromotionAnalyticsService,
   ) {}
 
   // --- VENDOR SPECIFIC ROUTES ---
@@ -442,9 +448,10 @@ async getPublicVendors(
   //===================================
   //  COUPONS
   //===================================
+ 
   @Get("marketing/stats")
   async getMarketingStats(@Req() req: any) {
-    return this.couponService.getVendorMarketingStats(req.user.id);
+    return this.analyticsService.getVendorMarketingStats(req.user.id);
   }
 
   /**
@@ -453,7 +460,7 @@ async getPublicVendors(
    */
   @Get("marketing/coupons")
   async getMyCoupons(@Req() req: any) {
-    return this.couponService.findVendorCoupons(req.user.id);
+    return this.promotionService.findVendorCoupons(req.user.id);
   }
 
   /**
@@ -462,12 +469,12 @@ async getPublicVendors(
    */
   @Get("marketing/campaigns/available")
   async getAvailableCampaigns() {
-    return this.couponService.getCampaignsOverview();
+    return this.campaignService.getCampaignsOverview();
   }
 
   /**
    * JOIN_PLATFORM_CAMPAIGN
-   * The "Artifact Injection" protocol to add products to a platform-wide sale.
+   * Handshake sequence linking local vendor inventory profiles into a global market event window.
    */
   @Post("marketing/campaigns/:id/join")
   @UsePipes(new ValidationPipe({ transform: true }))
@@ -476,16 +483,11 @@ async getPublicVendors(
     @Body("productIds") productIds: string[],
     @Req() req: any
   ) {
-    return this.couponService.participateInCampaign(
+    return this.campaignService.participateInCampaign(
       campaignId,
       productIds,
       req.user.id
     );
-  }
-
-    @Get(':id/products')
-  async getVendorProducts(@Param('id') id: string) {
-    return this.productsService.getVendorProducts(id);
   }
 
 }

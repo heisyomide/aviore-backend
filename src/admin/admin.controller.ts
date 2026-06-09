@@ -34,6 +34,8 @@ import { BroadcastDto } from './dto/broadcast.dto';
 import { ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { RolesGuard } from '../auth/roles.guard'; // <--- Ensure path is correct
 import { CreateCampaignDto } from './dto/create-campaign.dto';
+import { PromotionService } from 'src/coupons/promotion.service';
+import { CampaignService } from 'src/coupons/campaign.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -43,7 +45,9 @@ export class AdminController {
 
   constructor(
     private readonly adminService: AdminService,
-    private readonly couponService: CouponService
+    private readonly couponService: CouponService,
+    private readonly promotionService: PromotionService , 
+    private readonly campaignService: CampaignService,
   ) {}
 
   // =========================================================
@@ -154,15 +158,15 @@ export class AdminController {
   // =========================================================
 
 
-  @Post('campaigns')
-  @Roles(Role.ADMIN) // <--- The ROLES_KEY the RolesGuard looks for
-  @UsePipes(new ValidationPipe({ transform: true })) // Ensures DTO dates are parsed
+@Post('campaigns')
+  @UseGuards(JwtAuthGuard, RolesGuard) // 👈 Ensure this is here to populate req.user
+  @Roles(Role.ADMIN)
+  @UsePipes(new ValidationPipe({ transform: true }))
   async createCampaign(
     @Body() dto: CreateCampaignDto,
     @Req() req: any
   ) {
-    // Audit Registry: Passing req.user.id for internal traceability
-    return this.couponService.createCampaign(dto, req.user.id);
+    return this.campaignService.createCampaign(dto, req.user.id);
   }
 
 
@@ -172,7 +176,7 @@ export class AdminController {
   @Roles(Role.ADMIN)
   @UseGuards(JwtAuthGuard, RolesGuard)
   getCoupons() {
-    return this.couponService.getAdminRegistry();
+    return this.promotionService.getAdminRegistry();
   }
 
   @Patch('coupons/:id/toggle')
@@ -190,9 +194,11 @@ export class AdminController {
   // CAMPAIGNS
   // =========================================================
 
-  @Get('campaigns')
+@Get('campaigns')
+  @UseGuards(JwtAuthGuard, RolesGuard) // 👈 If this endpoint is admin-only
+  @Roles(Role.ADMIN)
   getCampaigns() {
-    return this.couponService.getCampaignsOverview();
+    return this.campaignService.getCampaignsOverview();
   }
 
 
