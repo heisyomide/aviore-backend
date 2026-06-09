@@ -46,18 +46,22 @@ export class VendorController {
 @Get('stats')
 @Roles('VENDOR')
 async getStats(@Req() req) {
-  if (!req.user.vendorId) {
-    throw new NotFoundException('Please complete your vendor registration to view the dashboard.');
-  }
-  return this.vendorService.getVendorDashboard(req.user.vendorId);
-}
-  @Get('products')
-  @Roles('VENDOR')
-  async getMyProducts(@Req() req) {
-    return this.prisma.product.findMany({
-      where: { vendorId: req.user.vendorId }
+  // 🛡️ Fallback: If your auth guard only attaches the user id, fetch the vendor record first
+  let vendorId = req.user.vendorId;
+
+  if (!vendorId) {
+    const vendorProfile = await this.prisma.vendor.findFirst({
+      where: { userId: req.user.id }
     });
+    
+    if (!vendorProfile) {
+      throw new NotFoundException('Please complete your vendor registration to view the dashboard.');
+    }
+    vendorId = vendorProfile.id;
   }
+
+  return this.vendorService.getVendorDashboard(vendorId);
+}
 
 @Post('products')
   @Roles('VENDOR')
