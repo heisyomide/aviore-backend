@@ -1196,7 +1196,7 @@ async replyToReview(vendorId: string, reviewId: string, replyText: string) {
   //  Product Analytics (basic summary)
   // ────────────────────────────────────────────────
 async getVendorAnalytics(vendorId: string) {
-  // 1. Fetch products with their related order items
+  // 1. Fetch products along with their corresponding order items cleanly
   const products = await this.prisma.product.findMany({
     where: { 
       vendorId,
@@ -1207,47 +1207,50 @@ async getVendorAnalytics(vendorId: string) {
     },
   });
 
-  // 2. Process metrics for each product
+  // 2. Process data nodes across the product array
   const productPerformance = products.map((product) => {
     const items = product.orderItems || [];
     
-    // Calculate total revenue for this specific product
+    // Convert numbers explicitly during collection evaluation
     const revenue = items.reduce((sum, item) => {
       const priceAtSale = Number(item.priceAtPurchase || product.price || 0);
-      const quantity = item.quantity || 0;
+      const quantity = Number(item.quantity || 0);
       return sum + (priceAtSale * quantity);
     }, 0);
 
-    const salesCount = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+    const salesCount = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
     return {
-      title: product.title,
-      revenue,
-      salesCount,
-      stock: product.stock,
+      title: product.title || 'Unknown Product',
+      revenue: Number(revenue),
+      salesCount: Number(salesCount),
+      stock: Number(product.stock || 0),
     };
   });
 
-  // 3. Aggregate high-level summary data
+  // 3. Aggregate root total metrics
   const totalRevenue = productPerformance.reduce((acc, curr) => acc + curr.revenue, 0);
   const totalOrders = productPerformance.reduce((acc, curr) => acc + curr.salesCount, 0);
 
-  // 4. Calculate dynamic percentage yields for top 5 products (Safe from 0 division)
+  // 4. Map down high yield nodes (Guarded against 0 division metrics)
   const topProducts = productPerformance
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 5)
     .map((p) => ({
-      ...p,
+      title: p.title,
+      revenue: p.revenue,
+      salesCount: p.salesCount,
+      stock: p.stock,
       revenuePercentage: totalRevenue > 0 ? Math.round((p.revenue / totalRevenue) * 100) : 0
     }));
 
   return {
     summary: {
-      totalRevenue,
-      totalOrders,
-      productCount: products.length,
+      totalRevenue: Number(totalRevenue),
+      totalOrders: Number(totalOrders),
+      productCount: Number(products.length),
     },
     topProducts,
   };
-}// Ensure this closing brace exists!
+}
 }

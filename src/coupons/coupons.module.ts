@@ -25,7 +25,8 @@ import { PromotionAnalyticsService } from './analytics.service';
   ],
   exports: [
     CouponService, 
-    CampaignService
-  ], // Exporting services that the upcoming Order/Checkout engine will need to access
+    CampaignService,
+    PromotionService // 👈 CRITICAL: Exposed so AdminController can compile the global ledger
+  ],
 })
 export class CouponsModule {}
