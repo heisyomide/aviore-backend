@@ -1200,7 +1200,7 @@ async getVendorAnalytics(vendorId: string) {
   const products = await this.prisma.product.findMany({
     where: { 
       vendorId,
-      isDeleted: false // Good practice to exclude deleted items from analytics
+      isDeleted: false
     },
     include: {
       orderItems: true, 
@@ -1209,18 +1209,15 @@ async getVendorAnalytics(vendorId: string) {
 
   // 2. Process metrics for each product
   const productPerformance = products.map((product) => {
-    // Standardizing the relation access (handling 'items' or 'orderItems')
     const items = product.orderItems || [];
     
     // Calculate total revenue for this specific product
     const revenue = items.reduce((sum, item) => {
-      // Use price at time of sale if it exists, otherwise fallback to current price
       const priceAtSale = Number(item.priceAtPurchase || product.price || 0);
       const quantity = item.quantity || 0;
       return sum + (priceAtSale * quantity);
     }, 0);
 
-    // Calculate total units sold
     const salesCount = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
 
     return {
@@ -1235,16 +1232,22 @@ async getVendorAnalytics(vendorId: string) {
   const totalRevenue = productPerformance.reduce((acc, curr) => acc + curr.revenue, 0);
   const totalOrders = productPerformance.reduce((acc, curr) => acc + curr.salesCount, 0);
 
+  // 4. Calculate dynamic percentage yields for top 5 products (Safe from 0 division)
+  const topProducts = productPerformance
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 5)
+    .map((p) => ({
+      ...p,
+      revenuePercentage: totalRevenue > 0 ? Math.round((p.revenue / totalRevenue) * 100) : 0
+    }));
+
   return {
     summary: {
       totalRevenue,
       totalOrders,
       productCount: products.length,
     },
-    // Top 5 products by revenue for the dashboard leaderboard
-    topProducts: productPerformance
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 5),
+    topProducts,
   };
 }// Ensure this closing brace exists!
 }
