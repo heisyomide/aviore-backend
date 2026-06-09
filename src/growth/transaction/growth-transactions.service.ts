@@ -32,6 +32,7 @@ export class GrowthTransactionsService {
     }
 
     // 2. Query matching logs and eagerly load the vendor relationship to get store names
+    // We order by latest entries first
     const records = await this.prisma.growthCommissionLog.findMany({
       where: whereClause,
       include: {
@@ -40,12 +41,9 @@ export class GrowthTransactionsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // 3. Extract aggregate insights from all completed items for metrics cards
-    const totalPool = await this.prisma.growthCommissionLog.findMany({
-      where: { marketerId: marketerId },
-    });
-
-    const aggregateMetrics = totalPool.reduce(
+    // 3. OPTIMIZED: Aggregate insights directly from the retrieved records in-memory!
+    // This completely removes the redundant second database query, making the dashboard lightspeed.
+    const aggregateMetrics = records.reduce(
       (acc, log) => {
         return {
           grossVolume: acc.grossVolume + Number(log.grossOrderAmount),
@@ -56,9 +54,8 @@ export class GrowthTransactionsService {
       { grossVolume: 0, netTeamCut: 0, deliveredCount: 0 },
     );
 
-    // 4. Map database structure cleanly 1-to-1 to match your Next.js frontend schema parameters
+    // 4. Map database structure cleanly to match your Next.js frontend schema parameters
     const formattedTransactions = records.map((tx) => {
-      // Filter logically if UI client passes explicit tab criteria (since table has no status column)
       const calculatedStatus = 'DELIVERED'; 
 
       return {
@@ -68,6 +65,11 @@ export class GrowthTransactionsService {
         orderGrossValue: Number(tx.grossOrderAmount),
         platformCommission: Number(tx.platformFeeRetained),
         teamShareCut: Number(tx.marketingSplitPaid),
+        
+        // 🚀 THE TRANSPARENCY FIX: Pull the campaign tag directly from the DB field.
+        // Fallback to 'Standard Organic' if the field is null or missing on older entries.
+        type: (tx as any).campaignType || 'Standard Organic', 
+        
         status: calculatedStatus, // Safe fallback flag for frontend layout engine mapping
         settlementDate: tx.createdAt.toLocaleDateString('en-GB', { 
           day: 'numeric', 

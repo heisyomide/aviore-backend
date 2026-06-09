@@ -120,8 +120,8 @@ if (!wallet) {
 if (
   !wallet.bankName ||
   wallet.bankName.trim() === '' ||
-  !wallet.accoutNumber ||
-  wallet.accoutNumber.trim() === ''
+  !wallet.accountNumber ||
+  wallet.accountNumber.trim() === ''
 ) {
   throw new BadRequestException(
     'PLEASE_ADD_BANK_DETAILS',
@@ -133,7 +133,7 @@ if (
 // ACCOUNT NUMBER VALIDATION
 // =============================
 if (
-  wallet.accoutNumber.length < 10
+  wallet.accountNumber.length < 10
 ) {
   throw new BadRequestException(
     'INVALID_ACCOUNT_NUMBER',
