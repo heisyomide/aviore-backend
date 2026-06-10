@@ -28,159 +28,159 @@ export class VendorService {
    * Fetches dashboard statistics for the logged-in vendor.
    */
 async getVendorDashboard(vendorId: string) {
-  const vendor = await this.prisma.vendor.findUnique({
-    where: {
-      id: vendorId,
-    },
-    include: {
-      vendorWallet: true,
-      user: {
-        select: {
-          firstName: true,
-          lastName: true,
-        },
-      },
-    },
-  });
+  console.log('====================================');
+  console.log('DASHBOARD REQUEST START');
+  console.log('vendorId:', vendorId);
+  console.log('====================================');
 
-  if (!vendor) {
-    throw new NotFoundException(
-      'VENDOR_PROFILE_NOT_FOUND',
+  try {
+    console.log('STEP 1: Fetch Vendor ONLY');
+
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        id: vendorId,
+      },
+    });
+
+    console.log('STEP 1 SUCCESS');
+    console.log(vendor);
+
+    if (!vendor) {
+      throw new NotFoundException(
+        'VENDOR_PROFILE_NOT_FOUND',
+      );
+    }
+
+    console.log('STEP 2: Fetch Vendor + User');
+
+    const vendorWithUser =
+      await this.prisma.vendor.findUnique({
+        where: {
+          id: vendorId,
+        },
+        include: {
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      });
+
+    console.log('STEP 2 SUCCESS');
+
+    console.log('STEP 3: Fetch Vendor Wallet');
+
+    const wallet =
+      await this.prisma.vendorWallet.findFirst({
+        where: {
+          vendorId,
+        },
+      });
+
+    console.log('STEP 3 SUCCESS');
+    console.log(wallet);
+
+    console.log('STEP 4: Product Count');
+
+    const productCount =
+      await this.prisma.product.count({
+        where: {
+          vendorId,
+        },
+      });
+
+    console.log(
+      'STEP 4 SUCCESS:',
+      productCount,
     );
+
+    console.log('STEP 5: Order Aggregate');
+
+    const orderStats =
+      await this.prisma.orderItem.aggregate({
+        where: {
+          product: {
+            vendorId,
+          },
+        },
+        _sum: {
+          vendorEarning: true,
+        },
+        _count: {
+          id: true,
+        },
+      });
+
+    console.log(
+      'STEP 5 SUCCESS:',
+      orderStats,
+    );
+
+    console.log('STEP 6: Recent Orders');
+
+    const recentOrders =
+      await this.prisma.orderItem.findMany({
+        where: {
+          product: {
+            vendorId,
+          },
+        },
+        take: 5,
+      });
+
+    console.log(
+      'STEP 6 SUCCESS:',
+      recentOrders.length,
+    );
+
+    console.log(
+      'DASHBOARD COMPLETED SUCCESSFULLY',
+    );
+
+    return {
+      success: true,
+      vendor: vendorWithUser,
+      wallet,
+      stats: orderStats,
+      productCount,
+      recentOrders,
+    };
+  } catch (error: any) {
+    console.log(
+      '====================================',
+    );
+
+    console.log(
+      'DASHBOARD FAILURE DETECTED',
+    );
+
+    console.log(
+      'ERROR MESSAGE:',
+      error?.message,
+    );
+
+    console.log(
+      'ERROR CODE:',
+      error?.code,
+    );
+
+    console.log(
+      'ERROR META:',
+      error?.meta,
+    );
+
+    console.log(
+      JSON.stringify(error, null, 2),
+    );
+
+    console.log(
+      '====================================',
+    );
+
+    throw error;
   }
-
-const paidStatuses: OrderStatus[] = [
-  OrderStatus.PAID,
-  OrderStatus.COMPLETED,
-];
-
-  const [
-    orderStats,
-    productCount,
-    recentOrders,
-  ] = await Promise.all([
-    this.prisma.orderItem.aggregate({
-      where: {
-        product: {
-          vendorId,
-        },
-        order: {
-          status: {
-            in: paidStatuses,
-          },
-        },
-      },
-      _sum: {
-        vendorEarning: true,
-      },
-      _count: {
-        id: true,
-      },
-    }),
-
-    this.prisma.product.count({
-      where: {
-        vendorId,
-        status: 'APPROVED',
-      },
-    }),
-
-    this.prisma.orderItem.findMany({
-      where: {
-        product: {
-          vendorId,
-        },
-      },
-      take: 5,
-      orderBy: {
-        createdAt: 'desc',
-      },
-      include: {
-        order: {
-          include: {
-            user: true,
-          },
-        },
-        product: {
-          select: {
-            title: true,
-          },
-        },
-      },
-    }),
-  ]);
-
-  const wallet = vendor.vendorWallet;
-
-  return {
-    profile: {
-      storeName: vendor.storeName,
-      isVerified: vendor.isVerified,
-      ownerName: [
-        vendor.user?.firstName,
-        vendor.user?.lastName,
-      ]
-        .filter(Boolean)
-        .join(' ') || 'Vendor',
-      slug: vendor.slug,
-    },
-
-    wallet: {
-      availableBalance: Number(
-        wallet?.availableBalance ?? 0,
-      ),
-      pendingBalance: Number(
-        wallet?.pendingBalance ?? 0,
-      ),
-      totalEarnings: Number(
-        wallet?.totalEarnings ?? 0,
-      ),
-    },
-
-    stats: {
-      totalOrders:
-        orderStats._count?.id ?? 0,
-
-      totalRevenue: Number(
-        orderStats._sum
-          ?.vendorEarning ?? 0,
-      ),
-
-      activeProducts: productCount,
-    },
-
-    recentOrders: recentOrders.map(
-      (item) => ({
-        id: item.orderId,
-
-        artifact:
-          item.product?.title ??
-          'Product',
-
-        customer:
-          item.order?.user
-            ? [
-                item.order.user
-                  .firstName,
-                item.order.user
-                  .lastName,
-              ]
-                .filter(Boolean)
-                .join(' ')
-            : 'Guest',
-
-        amount: Number(
-          item.vendorEarning ?? 0,
-        ),
-
-        status:
-          item.order?.status ??
-          'PENDING',
-
-        date: item.createdAt,
-      }),
-    ),
-  };
 }
 
 async getPublicProfileBySlug(slug: string) {
