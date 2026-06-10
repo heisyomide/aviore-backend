@@ -29,81 +29,59 @@ export class VendorService {
    */
 async getVendorDashboard(vendorId: string) {
   console.log('====================================');
-  console.log('DASHBOARD REQUEST START');
-  console.log('vendorId:', vendorId);
+  console.log('📊 DASHBOARD PIPELINE INITIALIZED');
+  console.log('Target Vendor ID:', vendorId);
   console.log('====================================');
 
   try {
-    console.log('STEP 1: Fetch Vendor ONLY');
-
-    const vendor = await this.prisma.vendor.findUnique({
-      where: {
-        id: vendorId,
+    // STEP 1 & 2: Fetch Vendor and User profile data combined in one optimized query
+    const vendorWithUser = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
     });
 
-    console.log('STEP 1 SUCCESS');
-    console.log(vendor);
-
-    if (!vendor) {
-      throw new NotFoundException(
-        'VENDOR_PROFILE_NOT_FOUND',
-      );
+    if (!vendorWithUser) {
+      throw new NotFoundException('VENDOR_PROFILE_NOT_FOUND');
     }
 
-    console.log('STEP 2: Fetch Vendor + User');
+    // STEP 3: Fetch Vendor Wallet metrics safely
+    const wallet = await this.prisma.vendorWallet.findFirst({
+      where: { vendorId },
+    });
 
-    const vendorWithUser =
-      await this.prisma.vendor.findUnique({
+    // STEP 4, 5 & 6: Execute aggregations using OR criteria to bridge any old userId vs vendorId data mismatches
+    const [productCount, orderStats, recentOrders] = await Promise.all([
+      // A. Product Count Tracking
+      this.prisma.product.count({
         where: {
-          id: vendorId,
+          OR: [
+            { vendorId: vendorId },
+            { userId: vendorWithUser.userId } // Fallback for legacy items linked to the user account ID
+          ],
         },
-        include: {
-          user: {
-            select: {
-              firstName: true,
-              lastName: true,
-            },
-          },
-        },
-      });
+      }),
 
-    console.log('STEP 2 SUCCESS');
-
-    console.log('STEP 3: Fetch Vendor Wallet');
-
-    const wallet =
-      await this.prisma.vendorWallet.findFirst({
+      // B. Financial Metrics Aggregation
+      this.prisma.orderItem.aggregate({
         where: {
-          vendorId,
-        },
-      });
-
-    console.log('STEP 3 SUCCESS');
-    console.log(wallet);
-
-    console.log('STEP 4: Product Count');
-
-    const productCount =
-      await this.prisma.product.count({
-        where: {
-          vendorId,
-        },
-      });
-
-    console.log(
-      'STEP 4 SUCCESS:',
-      productCount,
-    );
-
-    console.log('STEP 5: Order Aggregate');
-
-    const orderStats =
-      await this.prisma.orderItem.aggregate({
-        where: {
-          product: {
-            vendorId,
-          },
+          OR: [
+            { vendorId: vendorId },
+            {
+              product: {
+                OR: [
+                  { vendorId: vendorId },
+                  { userId: vendorWithUser.userId }
+                ]
+              }
+            }
+          ]
         },
         _sum: {
           vendorEarning: true,
@@ -111,77 +89,94 @@ async getVendorDashboard(vendorId: string) {
         _count: {
           id: true,
         },
-      });
+      }),
 
-    console.log(
-      'STEP 5 SUCCESS:',
-      orderStats,
-    );
-
-    console.log('STEP 6: Recent Orders');
-
-    const recentOrders =
-      await this.prisma.orderItem.findMany({
+      // C. Recent Orders List Compilation
+      this.prisma.orderItem.findMany({
         where: {
-          product: {
-            vendorId,
-          },
+          OR: [
+            { vendorId: vendorId },
+            {
+              product: {
+                OR: [
+                  { vendorId: vendorId },
+                  { userId: vendorWithUser.userId }
+                ]
+              }
+            }
+          ]
         },
         take: 5,
-      });
+        orderBy: {
+          createdAt: 'desc',
+        },
+        include: {
+          product: {
+            select: {
+              title: true,
+            },
+          },
+          order: {
+            include: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
 
-    console.log(
-      'STEP 6 SUCCESS:',
-      recentOrders.length,
-    );
+    console.log('✅ DASHBOARD COMPUTATION COMPLETED');
+    console.log(`Metrics Summary -> Products: ${productCount}, Total Orders Found: ${orderStats._count?.id ?? 0}`);
 
-    console.log(
-      'DASHBOARD COMPLETED SUCCESSFULLY',
-    );
-
+    // Map out consistent frontend JSON shapes
     return {
       success: true,
-      vendor: vendorWithUser,
-      wallet,
-      stats: orderStats,
-      productCount,
-      recentOrders,
+      profile: {
+        storeName: vendorWithUser.storeName,
+        isVerified: vendorWithUser.isVerified,
+        ownerName: [vendorWithUser.user?.firstName, vendorWithUser.user?.lastName]
+          .filter(Boolean)
+          .join(' ') || 'Vendor Partner',
+        slug: vendorWithUser.slug,
+      },
+      wallet: {
+        availableBalance: Number(wallet?.availableBalance ?? 0),
+        pendingBalance: Number(wallet?.pendingBalance ?? 0),
+        totalEarnings: Number(wallet?.totalEarnings ?? 0),
+      },
+      stats: {
+        totalOrders: orderStats._count?.id ?? 0,
+        totalRevenue: Number(orderStats._sum?.vendorEarning ?? 0),
+        activeProducts: productCount,
+      },
+      recentOrders: recentOrders.map((item) => ({
+        id: item.id,
+        orderId: item.orderId,
+        artifact: item.product?.title ?? 'Premium Catalog Asset',
+        customer: item.order?.user
+          ? [item.order.user.firstName, item.order.user.lastName].filter(Boolean).join(' ')
+          : 'Guest Client',
+        amount: Number(item.vendorEarning ?? 0),
+        status: item.payoutStatus || 'PENDING',
+        date: item.createdAt,
+      })),
     };
+
   } catch (error: any) {
-    console.log(
-      '====================================',
-    );
-
-    console.log(
-      'DASHBOARD FAILURE DETECTED',
-    );
-
-    console.log(
-      'ERROR MESSAGE:',
-      error?.message,
-    );
-
-    console.log(
-      'ERROR CODE:',
-      error?.code,
-    );
-
-    console.log(
-      'ERROR META:',
-      error?.meta,
-    );
-
-    console.log(
-      JSON.stringify(error, null, 2),
-    );
-
-    console.log(
-      '====================================',
-    );
-
+    console.log('====================================');
+    console.log('🚨 DASHBOARD EXECUTION EXCEPTION');
+    console.log('Message:', error?.message);
+    console.log('Code:', error?.code);
+    console.log('====================================');
     throw error;
   }
 }
+
 
 async getPublicProfileBySlug(slug: string) {
     const vendor = await this.prisma.vendor.findUnique({
