@@ -1,21 +1,33 @@
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PassportStrategy } from '@nestjs/passport';
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config'; // 👈 1. Import ConfigService
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  // 👈 2. Inject ConfigService into the constructor
-  constructor(private configService: ConfigService) {
+  constructor() {
+    const secret =
+      process.env.JWT_SECRET ||
+      'AVIORE_MARKETPLACE_SECRET_2026';
+
+    console.log('\n================ JWT STRATEGY ================');
+    console.log('JWT STRATEGY LOADED');
+    console.log('JWT_SECRET:', process.env.JWT_SECRET);
+    console.log('SECRET IN USE:', secret);
+    console.log('=============================================\n');
+
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest:
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      // 👈 3. Safely resolve the hot secret string using the config registry
-      secretOrKey: configService.get<string>('JWT_SECRET'),
+      secretOrKey: secret,
     });
   }
 
   async validate(payload: any) {
+    console.log('\n========== JWT VALIDATE ==========');
+    console.log('PAYLOAD:', payload);
+    console.log('==================================\n');
+
     return {
       id: payload.sub,
       email: payload.email,
