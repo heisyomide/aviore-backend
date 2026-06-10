@@ -87,11 +87,11 @@ async getVendorDashboard(vendorId: string) {
           vendorEarning: true,
         },
         _count: {
-          id: true,
+          _all: true, // 🚀 Use generic row-count index for absolute type-safety
         },
       }),
 
-      // C. Recent Orders List Compilation (Bypassing strict type bottlenecks via deep inclusion matching)
+      // C. Recent Orders List Compilation
       this.prisma.orderItem.findMany({
         where: {
           OR: [
@@ -120,10 +120,13 @@ async getVendorDashboard(vendorId: string) {
       }),
     ]);
 
-    // D. Safe Relation Extraction: Map the order details separately if missing on the base model type definition
+    // Extract values cleanly to handle dynamic structural types
+    const totalOrdersCount = orderStats._count?._all ?? 0;
+    const totalCalculatedRevenue = Number(orderStats._sum?.vendorEarning ?? 0);
+
+    // D. Safe Relation Extraction: Map the parent order contexts cleanly
     const structuredRecentOrders = await Promise.all(
       recentOrderItems.map(async (item) => {
-        // Fetch the target parent order data node separately to prevent TS property-lookup exceptions
         const associatedOrder = await this.prisma.order.findUnique({
           where: { id: item.orderId },
           include: {
@@ -151,7 +154,7 @@ async getVendorDashboard(vendorId: string) {
     );
 
     console.log('✅ DASHBOARD COMPUTATION COMPLETED');
-    console.log(`Metrics Summary -> Products: ${productCount}, Total Orders Found: ${orderStats._count?.id ?? 0}`);
+    console.log(`Metrics Summary -> Products: ${productCount}, Total Orders Found: ${totalOrdersCount}`);
 
     // Map out clean consistent JSON shapes directly back down the network pipe
     return {
@@ -170,8 +173,8 @@ async getVendorDashboard(vendorId: string) {
         totalEarnings: Number(wallet?.totalEarnings ?? 0),
       },
       stats: {
-        totalOrders: orderStats._count?.id ?? 0,
-        totalRevenue: Number(orderStats._sum?.vendorEarning ?? 0),
+        totalOrders: totalOrdersCount,
+        totalRevenue: totalCalculatedRevenue,
         activeProducts: productCount,
       },
       recentOrders: structuredRecentOrders,
@@ -186,6 +189,7 @@ async getVendorDashboard(vendorId: string) {
     throw error;
   }
 }
+
 
 
 
