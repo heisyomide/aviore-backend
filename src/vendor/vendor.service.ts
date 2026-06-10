@@ -34,7 +34,7 @@ async getVendorDashboard(vendorId: string) {
   console.log('====================================');
 
   try {
-    // STEP 1 & 2: Fetch Vendor and User profile data combined in one optimized query
+    // STEP 1 & 2: Combined optimized profile fetch
     const vendorWithUser = await this.prisma.vendor.findUnique({
       where: { id: vendorId },
       include: {
@@ -56,14 +56,14 @@ async getVendorDashboard(vendorId: string) {
       where: { vendorId },
     });
 
-    // STEP 4, 5 & 6: Execute aggregations using OR criteria to bridge any old userId vs vendorId data mismatches
-    const [productCount, orderStats, recentOrders] = await Promise.all([
+    // STEP 4, 5 & 6: Parallel Execution using fallback bridges for structural alignment
+    const [productCount, orderStats, recentOrderItems] = await Promise.all([
       // A. Product Count Tracking
       this.prisma.product.count({
         where: {
           OR: [
             { vendorId: vendorId },
-            { userId: vendorWithUser.userId } // Fallback for legacy items linked to the user account ID
+            { userId: vendorWithUser.userId }
           ],
         },
       }),
@@ -91,7 +91,7 @@ async getVendorDashboard(vendorId: string) {
         },
       }),
 
-      // C. Recent Orders List Compilation
+      // C. Recent Orders List Compilation (Bypassing strict type bottlenecks via deep inclusion matching)
       this.prisma.orderItem.findMany({
         where: {
           OR: [
@@ -116,24 +116,44 @@ async getVendorDashboard(vendorId: string) {
               title: true,
             },
           },
-          order: {
-            include: {
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                },
-              },
-            },
-          },
         },
       }),
     ]);
 
+    // D. Safe Relation Extraction: Map the order details separately if missing on the base model type definition
+    const structuredRecentOrders = await Promise.all(
+      recentOrderItems.map(async (item) => {
+        // Fetch the target parent order data node separately to prevent TS property-lookup exceptions
+        const associatedOrder = await this.prisma.order.findUnique({
+          where: { id: item.orderId },
+          include: {
+            user: {
+              select: {
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        });
+
+        return {
+          id: item.id,
+          orderId: item.orderId,
+          artifact: item.product?.title ?? 'Premium Catalog Asset',
+          customer: associatedOrder?.user
+            ? [associatedOrder.user.firstName, associatedOrder.user.lastName].filter(Boolean).join(' ')
+            : 'Guest Client',
+          amount: Number(item.vendorEarning ?? 0),
+          status: associatedOrder?.status || 'PENDING',
+          date: item.createdAt,
+        };
+      })
+    );
+
     console.log('✅ DASHBOARD COMPUTATION COMPLETED');
     console.log(`Metrics Summary -> Products: ${productCount}, Total Orders Found: ${orderStats._count?.id ?? 0}`);
 
-    // Map out consistent frontend JSON shapes
+    // Map out clean consistent JSON shapes directly back down the network pipe
     return {
       success: true,
       profile: {
@@ -154,17 +174,7 @@ async getVendorDashboard(vendorId: string) {
         totalRevenue: Number(orderStats._sum?.vendorEarning ?? 0),
         activeProducts: productCount,
       },
-      recentOrders: recentOrders.map((item) => ({
-        id: item.id,
-        orderId: item.orderId,
-        artifact: item.product?.title ?? 'Premium Catalog Asset',
-        customer: item.order?.user
-          ? [item.order.user.firstName, item.order.user.lastName].filter(Boolean).join(' ')
-          : 'Guest Client',
-        amount: Number(item.vendorEarning ?? 0),
-        status: item.payoutStatus || 'PENDING',
-        date: item.createdAt,
-      })),
+      recentOrders: structuredRecentOrders,
     };
 
   } catch (error: any) {
@@ -176,6 +186,7 @@ async getVendorDashboard(vendorId: string) {
     throw error;
   }
 }
+
 
 
 async getPublicProfileBySlug(slug: string) {
