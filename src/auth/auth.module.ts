@@ -11,18 +11,27 @@ import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
 import { PrismaService } from '../prisma.service';
 import { ReferralModule } from '../referral/referral.module';
+
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  'AVIORE_MARKETPLACE_SECRET_2026';
+
+console.log('\n============= AUTH MODULE =============');
+console.log('JWT SECRET:', JWT_SECRET);
+console.log('=======================================\n');
+
 @Module({
   imports: [
     UsersModule,
     MailModule,
     ReferralModule,
+
     PassportModule.register({
       defaultStrategy: 'jwt',
     }),
+
     JwtModule.register({
-      secret:
-        process.env.JWT_SECRET ||
-        'AVIORE_MARKETPLACE_SECRET_2026',
+      secret: JWT_SECRET,
       signOptions: {
         expiresIn: '1h',
       },
