@@ -52,17 +52,17 @@ export class GrowthDashboardService {
     const totalSalesCompleted = teamVendors.reduce((sum, v) => sum + v.orders.length, 0);
 
     // 4. Calculate Total Earnings from logs targeting the current monthly cycle—ISOLATED strictly to this individual
-    // ✅ Type-cast query payload to any temporarily to silence out-of-sync local Prisma Client types
-    const monthlyEarningsAggregate = await (this.prisma.growthCommissionLog.aggregate as any)({
+    // 🚀 FIXED: Changed marketingSplitPaid to marketerCommission to match your actual schema
+    const monthlyEarningsAggregate = await this.prisma.growthCommissionLog.aggregate({
       where: {
         marketerId: marketer.id, // 🔒 Kept secure to prevent sub-marketer data leakages
         createdAt: { gte: startOfMonth }
       },
       _sum: {
-        marketingSplitPaid: true 
+        marketerCommission: true // ⚡ Points directly to the actual field name in your Prisma Schema
       },
       _count: {
-        id: true 
+        _all: true 
       }
     });
 
@@ -79,12 +79,13 @@ export class GrowthDashboardService {
     // Map DB logs cleanly onto matching parameters expected by your Next.js UI structure
     const recentTransactions = recentTransactionsLogs.map((log: any, idx) => {
       const associatedStoreName = vendorMap.get(log.vendorId) || 'AVI_VND_STORE';
-      const fallbackSplitPaid = Number(log.marketingSplitPaid) || 0;
+      // 🚀 FIXED: Read from marketerCommission here as well
+      const fallbackCommissionPaid = Number(log.marketerCommission) || 0;
 
       return {
         target: associatedStoreName,
         id: `#ORD-${log.orderId?.substring(0, 4).toUpperCase() || '98' + idx}`,
-        amount: `₦${fallbackSplitPaid.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
+        amount: `₦${fallbackCommissionPaid.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
         date: log.createdAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
       };
     });
@@ -106,8 +107,8 @@ export class GrowthDashboardService {
     });
 
     // Safe fallback extractions to guard against undefined properties during database instantiation phases
-    const totalMonthEarnings = Number(monthlyEarningsAggregate?._sum?.marketingSplitPaid || 0);
-    const totalMonthSalesCount = monthlyEarningsAggregate?._count?.id || 0;
+    const totalMonthEarnings = Number(monthlyEarningsAggregate?._sum?.marketerCommission || 0);
+    const totalMonthSalesCount = monthlyEarningsAggregate?._count?._all || 0;
 
     // Assemble the complete payload to deliver back to your frontend layout view
     return {
@@ -139,4 +140,5 @@ export class GrowthDashboardService {
       transactions: recentTransactions
     };
   }
+}
 }
