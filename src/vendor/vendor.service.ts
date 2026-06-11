@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma.service';
 import { v2 as cloudinary } from 'cloudinary';
 import { Readable } from 'stream';
 import { VendorCreateProductDto  } from './dto/vendor-product.dto';
-import { OrderStatus, Prisma } from '@prisma/client'; // Import the auto-generated enum
+import { OrderStatus, Prisma, ProductStatus } from '@prisma/client'; // Import the auto-generated enum
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'; 
 import { Roles } from '../auth/roles.decorator';
 
@@ -28,170 +28,160 @@ export class VendorService {
    * Fetches dashboard statistics for the logged-in vendor.
    */
 async getVendorDashboard(vendorId: string) {
-  console.log('====================================');
-  console.log('📊 DASHBOARD PIPELINE INITIALIZED');
-  console.log('Target Vendor ID:', vendorId);
-  console.log('====================================');
-
-  try {
-    // STEP 1 & 2: Combined optimized profile fetch
-    const vendorWithUser = await this.prisma.vendor.findUnique({
-      where: { id: vendorId },
-      include: {
-        user: {
-          select: {
-            firstName: true,
-            lastName: true,
-          },
+  const vendor = await this.prisma.vendor.findUnique({
+    where: {
+      id: vendorId,
+    },
+    include: {
+      vendorWallet: true,
+      user: {
+        select: {
+          firstName: true,
+          lastName: true,
         },
       },
-    });
+    },
+  });
 
-    if (!vendorWithUser) {
-      throw new NotFoundException('VENDOR_PROFILE_NOT_FOUND');
-    }
-
-    // STEP 3: Fetch Vendor Wallet metrics safely
-    const wallet = await this.prisma.vendorWallet.findFirst({
-      where: { vendorId },
-    });
-
-    // STEP 4, 5 & 6: Parallel Execution using fallback bridges for structural alignment
-    const [productCount, orderStats, recentOrderItems] = await Promise.all([
-      // A. Product Count Tracking
-      this.prisma.product.count({
-        where: {
-          OR: [
-            { vendorId: vendorId },
-            { userId: vendorWithUser.userId }
-          ],
-        },
-      }),
-
-      // B. Financial Metrics Aggregation
-      this.prisma.orderItem.aggregate({
-        where: {
-          OR: [
-            { vendorId: vendorId },
-            {
-              product: {
-                OR: [
-                  { vendorId: vendorId },
-                  { userId: vendorWithUser.userId }
-                ]
-              }
-            }
-          ]
-        },
-        _sum: {
-          vendorEarning: true,
-        },
-        _count: {
-          _all: true, // 🚀 Use generic row-count index for absolute type-safety
-        },
-      }),
-
-      // C. Recent Orders List Compilation
-      this.prisma.orderItem.findMany({
-        where: {
-          OR: [
-            { vendorId: vendorId },
-            {
-              product: {
-                OR: [
-                  { vendorId: vendorId },
-                  { userId: vendorWithUser.userId }
-                ]
-              }
-            }
-          ]
-        },
-        take: 5,
-        orderBy: {
-          createdAt: 'desc',
-        },
-        include: {
-          product: {
-            select: {
-              title: true,
-            },
-          },
-        },
-      }),
-    ]);
-
-    // Extract values cleanly to handle dynamic structural types
-    const totalOrdersCount = orderStats._count?._all ?? 0;
-    const totalCalculatedRevenue = Number(orderStats._sum?.vendorEarning ?? 0);
-
-    // D. Safe Relation Extraction: Map the parent order contexts cleanly
-    const structuredRecentOrders = await Promise.all(
-      recentOrderItems.map(async (item) => {
-        const associatedOrder = await this.prisma.order.findUnique({
-          where: { id: item.orderId },
-          include: {
-            user: {
-              select: {
-                firstName: true,
-                lastName: true,
-              },
-            },
-          },
-        });
-
-        return {
-          id: item.id,
-          orderId: item.orderId,
-          artifact: item.product?.title ?? 'Premium Catalog Asset',
-          customer: associatedOrder?.user
-            ? [associatedOrder.user.firstName, associatedOrder.user.lastName].filter(Boolean).join(' ')
-            : 'Guest Client',
-          amount: Number(item.vendorEarning ?? 0),
-          status: associatedOrder?.status || 'PENDING',
-          date: item.createdAt,
-        };
-      })
+  if (!vendor) {
+    throw new NotFoundException(
+      'VENDOR_PROFILE_NOT_FOUND',
     );
-
-    console.log('✅ DASHBOARD COMPUTATION COMPLETED');
-    console.log(`Metrics Summary -> Products: ${productCount}, Total Orders Found: ${totalOrdersCount}`);
-
-    // Map out clean consistent JSON shapes directly back down the network pipe
-    return {
-      success: true,
-      profile: {
-        storeName: vendorWithUser.storeName,
-        isVerified: vendorWithUser.isVerified,
-        ownerName: [vendorWithUser.user?.firstName, vendorWithUser.user?.lastName]
-          .filter(Boolean)
-          .join(' ') || 'Vendor Partner',
-        slug: vendorWithUser.slug,
-      },
-      wallet: {
-        availableBalance: Number(wallet?.availableBalance ?? 0),
-        pendingBalance: Number(wallet?.pendingBalance ?? 0),
-        totalEarnings: Number(wallet?.totalEarnings ?? 0),
-      },
-      stats: {
-        totalOrders: totalOrdersCount,
-        totalRevenue: totalCalculatedRevenue,
-        activeProducts: productCount,
-      },
-      recentOrders: structuredRecentOrders,
-    };
-
-  } catch (error: any) {
-    console.log('====================================');
-    console.log('🚨 DASHBOARD EXECUTION EXCEPTION');
-    console.log('Message:', error?.message);
-    console.log('Code:', error?.code);
-    console.log('====================================');
-    throw error;
   }
+
+const paidStatuses: OrderStatus[] = [
+  OrderStatus.PAID,
+  OrderStatus.COMPLETED,
+];
+
+  const [
+    orderStats,
+    productCount,
+    recentOrders,
+  ] = await Promise.all([
+    this.prisma.orderItem.aggregate({
+      where: {
+        product: {
+          vendorId,
+        },
+        order: {
+          status: {
+            in: paidStatuses,
+          },
+        },
+      },
+      _sum: {
+        vendorEarning: true,
+      },
+      _count: {
+        id: true,
+      },
+    }),
+
+    this.prisma.product.count({
+      where: {
+        vendorId,
+        status: 'APPROVED',
+      },
+    }),
+
+    this.prisma.orderItem.findMany({
+      where: {
+        product: {
+          vendorId,
+        },
+      },
+      take: 5,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        order: {
+          include: {
+            user: true,
+          },
+        },
+        product: {
+          select: {
+            title: true,
+          },
+        },
+      },
+    }),
+  ]);
+
+  const wallet = vendor.vendorWallet;
+
+  return {
+    profile: {
+      storeName: vendor.storeName,
+      isVerified: vendor.isVerified,
+      ownerName: [
+        vendor.user?.firstName,
+        vendor.user?.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ') || 'Vendor',
+      slug: vendor.slug,
+    },
+
+    wallet: {
+      availableBalance: Number(
+        wallet?.availableBalance ?? 0,
+      ),
+      pendingBalance: Number(
+        wallet?.pendingBalance ?? 0,
+      ),
+      totalEarnings: Number(
+        wallet?.totalEarnings ?? 0,
+      ),
+    },
+
+    stats: {
+      totalOrders:
+        orderStats._count?.id ?? 0,
+
+      totalRevenue: Number(
+        orderStats._sum
+          ?.vendorEarning ?? 0,
+      ),
+
+      activeProducts: productCount,
+    },
+
+    recentOrders: recentOrders.map(
+      (item) => ({
+        id: item.orderId,
+
+        artifact:
+          item.product?.title ??
+          'Product',
+
+        customer:
+          item.order?.user
+            ? [
+                item.order.user
+                  .firstName,
+                item.order.user
+                  .lastName,
+              ]
+                .filter(Boolean)
+                .join(' ')
+            : 'Guest',
+
+        amount: Number(
+          item.vendorEarning ?? 0,
+        ),
+
+        status:
+          item.order?.status ??
+          'PENDING',
+
+        date: item.createdAt,
+      }),
+    ),
+  };
 }
-
-
-
 
 async getPublicProfileBySlug(slug: string) {
     const vendor = await this.prisma.vendor.findUnique({
