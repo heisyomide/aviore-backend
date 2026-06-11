@@ -1,4 +1,3 @@
-// src/growth/dashboard/dashboard.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 
@@ -33,53 +32,59 @@ export class GrowthDashboardService {
       include: {
         _count: {
           select: { products: true } // Counts vendor items dynamically
-        },
-        orders: {
-          where: { status: 'DELIVERED' },
-          select: { id: true },
         }
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    // 3. Compute dynamic cluster counts for the shared team summary metrics
     const totalVendorsReferred = teamVendors.length;
     
     // Active counts matching your 5+ verified product automation requirement across the team
     const activeVendorsCount = teamVendors.filter(v => v._count.products >= 5).length;
 
-    // Sum up cumulative sales completions across your global cohort pipeline
-    const totalSalesCompleted = teamVendors.reduce((sum, v) => sum + v.orders.length, 0);
+    // Extract all vendor IDs belonging to this cluster to safely aggregate global sales data
+    const teamVendorIds = teamVendors.map(v => v.id);
 
-    // 4. Calculate Total Earnings from logs targeting the current monthly cycle—ISOLATED strictly to this individual
-    // 🚀 FIXED: Changed marketingSplitPaid to marketerCommission to match your actual schema
-    const monthlyEarningsAggregate = await this.prisma.growthCommissionLog.aggregate({
-      where: {
-        marketerId: marketer.id, // 🔒 Kept secure to prevent sub-marketer data leakages
-        createdAt: { gte: startOfMonth }
-      },
-      _sum: {
-        marketerCommission: true // ⚡ Points directly to the actual field name in your Prisma Schema
-      },
-      _count: {
-        _all: true 
-      }
-    });
+    // 3. Fetch cluster metrics safely using explicit structural tables
+    const [globalSalesCount, monthlyEarningsAggregate, recentTransactionsLogs] = await Promise.all([
+      // A. Count of DELIVERED items across the entire team cluster
+      teamVendorIds.length > 0 
+        ? this.prisma.orderItem.count({
+            where: {
+              product: { vendorId: { in: teamVendorIds } },
+              order: { status: 'DELIVERED' }
+            }
+          })
+        : 0,
 
-    // 5. Build Recent Transactions Component Stack—ISOLATED strictly to this individual
-    const recentTransactionsLogs = await this.prisma.growthCommissionLog.findMany({
-      where: { marketerId: marketer.id }, // 🔒 Secure personal pipeline ledger visibility
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-    });
+      // B. Calculate Total Earnings from logs targeting the current monthly cycle for THIS individual
+      this.prisma.growthCommissionLog.aggregate({
+        where: {
+          marketerId: marketer.id, // 🔒 Kept secure to prevent sub-marketer data leakages
+          createdAt: { gte: startOfMonth }
+        },
+        _sum: {
+          marketerCommission: true
+        },
+        _count: {
+          id: true // 🚀 Safe id row-count mapping
+        }
+      }),
+
+      // C. Build Recent Transactions Component Stack for THIS individual
+      this.prisma.growthCommissionLog.findMany({
+        where: { marketerId: marketer.id }, // 🔒 Secure personal pipeline ledger visibility
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+      })
+    ]);
 
     // Extract store lookup map from team data to resolve titles quickly
     const vendorMap = new Map(teamVendors.map(v => [v.id, v.storeName]));
 
-    // Map DB logs cleanly onto matching parameters expected by your Next.js UI structure
+    // 4. Map DB logs cleanly onto matching parameters expected by your Next.js UI structure
     const recentTransactions = recentTransactionsLogs.map((log: any, idx) => {
       const associatedStoreName = vendorMap.get(log.vendorId) || 'AVI_VND_STORE';
-      // 🚀 FIXED: Read from marketerCommission here as well
       const fallbackCommissionPaid = Number(log.marketerCommission) || 0;
 
       return {
@@ -90,37 +95,46 @@ export class GrowthDashboardService {
       };
     });
 
-    // 6. Map Shared Vendor Grid overview list (Showing the 5 most recent team onboardings)
-    const vendorOverviewList = teamVendors.slice(0, 5).map(v => {
-      let computedStatus = 'Pending';
-      if (v._count.products >= 5) computedStatus = 'Active';
-      if (v._count.products === 0) computedStatus = 'Inactive';
+    // 5. Gather delivered sales counts per vendor for the overview grid ranking mapping
+    const vendorOverviewList = await Promise.all(
+      teamVendors.slice(0, 5).map(async (v) => {
+        let computedStatus = 'Pending';
+        if (v._count.products >= 5) computedStatus = 'Active';
+        if (v._count.products === 0) computedStatus = 'Inactive';
 
-      return {
-        name: v.storeName, 
-        status: computedStatus,
-        items: v._count.products,
-        sales: v.orders.length,
-        date: v.createdAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-        avatarInit: v.storeName ? v.storeName.charAt(0).toUpperCase() : 'V'
-      };
-    });
+        const directSalesCount = await this.prisma.orderItem.count({
+          where: {
+            product: { vendorId: v.id },
+            order: { status: 'DELIVERED' }
+          }
+        });
 
-    // Safe fallback extractions to guard against undefined properties during database instantiation phases
+        return {
+          name: v.storeName, 
+          status: computedStatus,
+          items: v._count.products,
+          sales: directSalesCount,
+          date: v.createdAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+          avatarInit: v.storeName ? v.storeName.charAt(0).toUpperCase() : 'V'
+        };
+      })
+    );
+
+    // Safe fallbacks to handle database initialization states
     const totalMonthEarnings = Number(monthlyEarningsAggregate?._sum?.marketerCommission || 0);
-    const totalMonthSalesCount = monthlyEarningsAggregate?._count?._all || 0;
+    const totalMonthSalesCount = monthlyEarningsAggregate?._count?.id || 0;
 
-    // Assemble the complete payload to deliver back to your frontend layout view
+    // 6. Assemble payload back to your AVIORÈ layout dashboard components view
     return {
       referralParameters: {
         teamCode: marketer.teamCode,
         referralUrl: `https://shopaviore.store/register-vendor?ref=${marketer.trackingTag || marketer.teamCode}`
       },
       vacationGoal: {
-        completedSales: totalSalesCompleted,
+        completedSales: globalSalesCount,
         targetSales: 500,
-        percentage: Math.min(Math.round((totalSalesCompleted / 500) * 100), 100),
-        remaining: Math.max(500 - totalSalesCompleted, 0)
+        percentage: Math.min(Math.round((globalSalesCount / 500) * 100), 100),
+        remaining: Math.max(500 - globalSalesCount, 0)
       },
       walletSummary: {
         balance: `₦${Number(marketer.wallet?.balance || 0).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
@@ -129,7 +143,7 @@ export class GrowthDashboardService {
       statsGrid: [
         { title: 'Total Vendors Referred', value: totalVendorsReferred.toString(), subtext: 'Team Volume' },
         { title: 'Active Vendors', value: activeVendorsCount.toString(), subtext: 'Met 5+ product rule' },
-        { title: 'Successful Sales', value: totalSalesCompleted.toString(), subtext: 'Team Volume' },
+        { title: 'Successful Sales', value: globalSalesCount.toString(), subtext: 'Team Volume' },
         { 
           title: 'Total Earnings (This Month)', 
           value: `₦${totalMonthEarnings.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`, 
