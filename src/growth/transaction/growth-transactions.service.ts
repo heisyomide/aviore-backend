@@ -31,13 +31,28 @@ export class GrowthTransactionsService {
     }
 
     // 2. Query matching logs and eagerly load the vendor relationship to get store names
-    const records = await this.prisma.growthCommissionLog.findMany({
-      where: whereClause,
-      include: {
-        vendor: true,
+    const records =
+  await this.prisma.growthCommissionLog.findMany({
+    where: whereClause,
+
+    include: {
+      vendor: {
+        select: {
+          storeName: true,
+        },
       },
-      orderBy: { createdAt: 'desc' },
-    });
+
+      order: {
+        select: {
+          status: true,
+        },
+      },
+    },
+
+    orderBy: {
+      createdAt: 'desc',
+    },
+  });
 
     // 3. OPTIMIZED ACCUMULATION: Aggregate insights using your official database columns
     const aggregateMetrics = records.reduce(
@@ -56,43 +71,98 @@ export class GrowthTransactionsService {
     );
 
     // 4. Map database structure cleanly to match your AVIORÈ Next.js frontend params
-    const formattedTransactions = records.map((tx: any) => {
-      const calculatedStatus = 'DELIVERED'; 
-      
-      // ✅ FIXED SCHEMA ALIGNMENT
-      const grossVal = Number(tx.retailAmount || tx.customerPaid || 0);
-      const commissionRetained = Number(tx.avioreCommission || tx.platformNetCommission || 0);
-      const splitPaid = Number(tx.marketerCommission || 0);
+    const formattedTransactions = records.map((tx) => ({
+  id: tx.id,
 
-      return {
-        id: tx.id,
-        orderId: tx.orderId,
-        vendorStore: tx.vendor?.storeName || 'Ecosystem Merchant',
-        orderGrossValue: grossVal,
-        platformCommission: commissionRetained,
-        teamShareCut: splitPaid,
-        
-        // ✅ FIXED CAMPAIGN PROPERTY: Pulls structural enum fallback string smoothly
-        type: tx.commissionType || 'ORGANIC', 
-        
-        status: calculatedStatus, 
-        settlementDate: tx.createdAt.toLocaleDateString('en-GB', { 
-          day: 'numeric', 
-          month: 'short', 
-          year: 'numeric' 
-        }),
-      };
-    });
+  orderId: tx.orderId,
 
-    // Handle frontend tab filters in-memory if requested
-    const filteredTransactions = status && status !== GrowthTransactionStatus.ALL
-      ? formattedTransactions.filter((t) => t.status === status)
-      : formattedTransactions;
+  vendorStore:
+    tx.vendor?.storeName ??
+    'Ecosystem Merchant',
 
-    return {
-      aggregateMetrics,
-      transactions: filteredTransactions,
-    };
-  }
-}
+  // =========================
+  // SALES DATA
+  // =========================
+
+  retailAmount: Number(
+    tx.retailAmount,
+  ),
+
+  customerPaid: Number(
+    tx.customerPaid,
+  ),
+
+  vendorPayout: Number(
+    tx.vendorPayout,
+  ),
+
+  // =========================
+  // PLATFORM DATA
+  // =========================
+
+  platformGrossCommission: Number(
+    tx.platformGrossCommission,
+  ),
+
+  platformNetCommission: Number(
+    tx.platformNetCommission,
+  ),
+
+  avioreCommission: Number(
+    tx.avioreCommission,
+  ),
+
+  // =========================
+  // MARKETER DATA
+  // =========================
+
+  marketerCommission: Number(
+    tx.marketerCommission,
+  ),
+
+  // =========================
+  // DISCOUNTS
+  // =========================
+
+  vendorCouponDiscount: Number(
+    tx.vendorCouponDiscount,
+  ),
+
+  referralDiscount: Number(
+    tx.referralDiscount,
+  ),
+
+  // =========================
+  // COMMISSION TYPE
+  // =========================
+
+  type: tx.commissionType,
+
+  // =========================
+  // ORDER STATUS
+  // =========================
+
+  status:
+    tx.order?.status ??
+    'UNKNOWN',
+
+  // =========================
+  // FRONTEND COMPATIBILITY
+  // =========================
+
+  orderGrossValue: Number(
+    tx.retailAmount,
+  ),
+
+  platformCommission: Number(
+    tx.avioreCommission,
+  ),
+
+  teamShareCut: Number(
+    tx.marketerCommission,
+  ),
+
+  settlementDate:
+    tx.createdAt.toISOString(),
+}));
 }
