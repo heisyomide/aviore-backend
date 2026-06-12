@@ -178,12 +178,7 @@ export class GrowthAnalyticsService {
                 'ORGANIC',
             ).length;
 
-          const couponSales =
-            operator.commissionLogs.filter(
-              (log) =>
-                log.commissionType ===
-                'VENDOR_COUPON',
-            ).length;
+
 
           const referralSales =
             operator.commissionLogs.filter(
@@ -227,7 +222,7 @@ export class GrowthAnalyticsService {
 
             organicSales,
 
-            couponSales,
+           
 
             referralSales,
 
