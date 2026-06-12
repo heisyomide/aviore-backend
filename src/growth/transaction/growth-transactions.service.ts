@@ -18,7 +18,6 @@ export class GrowthTransactionsService {
       marketerId: marketerId,
     };
 
-    // Apply loose string search across multiple transaction fields and relation branches
     if (search) {
       whereClause.OR = [
         { id: { contains: search, mode: 'insensitive' } },
@@ -40,13 +39,12 @@ export class GrowthTransactionsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // 3. OPTIMIZED: Aggregate insights directly from the retrieved records in-memory!
-    // ✅ FIX: Force type-cast log item as 'any' to cleanly read values bypassing un-synchronized schema state
+    // 3. OPTIMIZED ACCUMULATION: Aggregate insights using your official database columns
     const aggregateMetrics = records.reduce(
       (acc, log: any) => {
-        // Fallback checks map database schemas safely (using retailAmount if grossOrderAmount isn't compiled)
-        const grossVal = Number(log.grossOrderAmount || log.retailAmount || 0);
-        const splitPaid = Number(log.marketingSplitPaid || 0);
+        // ✅ FIXED SCHEMA MATCH: Maps cleanly to explicit tracking schema fields
+        const grossVal = Number(log.retailAmount || log.customerPaid || 0);
+        const splitPaid = Number(log.marketerCommission || 0);
 
         return {
           grossVolume: acc.grossVolume + grossVal,
@@ -57,12 +55,14 @@ export class GrowthTransactionsService {
       { grossVolume: 0, netTeamCut: 0, deliveredCount: 0 },
     );
 
-    // 4. Map database structure cleanly to match your Next.js frontend schema parameters
+    // 4. Map database structure cleanly to match your AVIORÈ Next.js frontend params
     const formattedTransactions = records.map((tx: any) => {
       const calculatedStatus = 'DELIVERED'; 
-      const grossVal = Number(tx.grossOrderAmount || tx.retailAmount || 0);
-      const commissionRetained = Number(tx.platformFeeRetained || tx.avioreCommission || 0);
-      const splitPaid = Number(tx.marketingSplitPaid || 0);
+      
+      // ✅ FIXED SCHEMA ALIGNMENT
+      const grossVal = Number(tx.retailAmount || tx.customerPaid || 0);
+      const commissionRetained = Number(tx.avioreCommission || tx.platformNetCommission || 0);
+      const splitPaid = Number(tx.marketerCommission || 0);
 
       return {
         id: tx.id,
@@ -72,10 +72,10 @@ export class GrowthTransactionsService {
         platformCommission: commissionRetained,
         teamShareCut: splitPaid,
         
-        // 🚀 THE TRANSPARENCY FIX: Pull the campaign tag directly from the DB field.
-        type: tx.campaignType || 'Standard Organic', 
+        // ✅ FIXED CAMPAIGN PROPERTY: Pulls structural enum fallback string smoothly
+        type: tx.commissionType || 'ORGANIC', 
         
-        status: calculatedStatus, // Safe fallback flag for frontend layout engine mapping
+        status: calculatedStatus, 
         settlementDate: tx.createdAt.toLocaleDateString('en-GB', { 
           day: 'numeric', 
           month: 'short', 
@@ -94,4 +94,5 @@ export class GrowthTransactionsService {
       transactions: filteredTransactions,
     };
   }
+}
 }
