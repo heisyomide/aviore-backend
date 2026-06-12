@@ -326,59 +326,256 @@ export class PaymentsService implements OnModuleInit {
  // =====================================================
   // HIGH-PERFORMANCE ESCROW SPLIT ENGINE
   // =====================================================
-  private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
-    if (!items || items.length === 0) return;
+private async settleOrderItems(
+  tx: Prisma.TransactionClient,
+  items: any[],
+) {
+  if (!items?.length) return;
 
-    // Batch fetch all matching products in ONE query instead of N iterations
-    const productIds = items.map((item) => item.productId);
-    const products = await tx.product.findMany({
-      where: { id: { in: productIds } },
+  const productIds = items.map(
+    (item) => item.productId,
+  );
+
+const products = await tx.product.findMany({
+  where: {
+    id: {
+      in: productIds,
+    },
+  },
+
+  include: {
+    vendor: {
+      select: {
+        id: true,
+        marketerId: true,
+      },
+    },
+  },
+});
+  for (const item of items) {
+    const product = products.find(
+      (p) => p.id === item.productId,
+    );
+
+    if (!product) {
+      throw new NotFoundException(
+        `PRODUCT_NOT_FOUND: ${item.productId}`,
+      );
+    }
+
+    // ======================================
+    // GROSS ITEM VALUE
+    // ======================================
+
+    const gross =
+      Number(item.priceAtPurchase) *
+      Number(item.quantity);
+
+    // ======================================
+    // PLATFORM COMMISSION
+    // ALWAYS CALCULATED FROM
+    // ORIGINAL PRODUCT VALUE
+    // ======================================
+
+    const platformCommission =
+      gross * 0.1;
+
+    // ======================================
+    // VENDOR BASE EARNING
+    // ======================================
+
+    const vendorBaseEarning =
+      gross - platformCommission;
+
+    // ======================================
+    // VENDOR COUPON COST
+    // VENDOR FUNDS THIS
+    // ======================================
+
+    const vendorCouponAmount =
+      Number(item.vendorCouponAmount ?? 0);
+
+    // ======================================
+    // REFERRAL COST
+    // PLATFORM FUNDS THIS
+    // ======================================
+
+    const referralVoucherAmount =
+      Number(item.referralVoucherAmount ?? 0);
+
+    // ======================================
+    // PLATFORM NET
+    // ======================================
+
+    const platformNetCommission =
+      platformCommission -
+      referralVoucherAmount;
+
+    // Safety
+
+    const safePlatformNet =
+      Math.max(
+        0,
+        platformNetCommission,
+      );
+
+    // ======================================
+    // MARKETER SHARE
+    // 20% OF PLATFORM NET
+    // ======================================
+
+    const marketerCommission =
+      safePlatformNet * 0.2;
+
+    // ======================================
+    // AVIORE SHARE
+    // ======================================
+
+    const avioreCommission =
+      safePlatformNet -
+      marketerCommission;
+
+    // ======================================
+    // VENDOR NET
+    // ======================================
+
+    const vendorNetEarning =
+      vendorBaseEarning -
+      vendorCouponAmount;
+
+    // ======================================
+    // SAVE ORDER ITEM
+    // ======================================
+
+await tx.orderItem.update({
+  where: {
+    id: item.id,
+  },
+  data: {
+    // 1. Core Financial Fields
+    commission: platformCommission, 
+    platformCommission: platformCommission, // Maps cleanly now
+    vendorEarning: vendorNetEarning,
+    payoutStatus: 'LOCKED',
+
+    // 2. Mapped Discounts (Fixed naming mismatches)
+    vendorCouponDiscount: vendorCouponAmount, // Maps variable to schema field
+    referralDiscount: referralVoucherAmount, // Maps variable to schema field
+
+    // 3. New Split Commissions (Now aligned with your schema changes)
+    platformNetCommission: safePlatformNet,
+    marketingCommission: marketerCommission,
+  },
+});
+    // ======================================
+    // CREDIT VENDOR WALLET
+    // ======================================
+
+    await tx.vendorWallet.upsert({
+      where: {
+        vendorId:
+          product.vendorId,
+      },
+
+      update: {
+        pendingBalance: {
+          increment:
+            vendorNetEarning,
+        },
+
+        totalEarnings: {
+          increment:
+            vendorNetEarning,
+        },
+      },
+
+      create: {
+        vendorId:
+          product.vendorId,
+
+        availableBalance: 0,
+
+        pendingBalance:
+          vendorNetEarning,
+
+        totalEarnings:
+          vendorNetEarning,
+      },
     });
 
-    for (const item of items) {
-      const targetProduct = products.find((p) => p.id === item.productId);
-      if (!targetProduct) {
-        throw new NotFoundException(`PRODUCT_NOT_FOUND_FOR_ID: ${item.productId}`);
-      }
+    // ======================================
+    // MARKETER WALLET
+    // ======================================
 
-      const gross = Number(item.priceAtPurchase) * Number(item.quantity);
-      const commission = gross * this.COMMISSION_RATE;
-      const earning = gross - commission;
+const marketerId =
+  product.vendor?.marketerId;
 
-      // Update OrderItem status markers
-      await tx.orderItem.update({
-        where: { id: item.id },
-        data: {
-          commission,
-          vendorEarning: earning,
-          payoutStatus: 'LOCKED',
+if (
+  marketerCommission > 0 &&
+  marketerId
+) {
+  await tx.marketingWallet.upsert({
+    where: {
+      marketerId,
+    },
+
+    update: {
+      balance: {
+        increment:
+          marketerCommission,
+      },
+    },
+
+    create: {
+      marketerId,
+      balance:
+        marketerCommission,
+    },
+  });
+}
+
+    // ======================================
+    // PRODUCT STOCK
+    // ======================================
+
+    await tx.product.update({
+      where: {
+        id: product.id,
+      },
+
+      data: {
+        stock: {
+          decrement:
+            item.quantity,
         },
-      });
+      },
+    });
 
-      // Credit the specific vendor's pending account ledger balance
-      await tx.vendorWallet.upsert({
-        where: { vendorId: targetProduct.vendorId },
-        update: {
-          pendingBalance: { increment: earning },
-          totalEarnings: { increment: earning },
-        },
-        create: {
-          vendorId: targetProduct.vendorId,
-          availableBalance: 0,
-          pendingBalance: earning,
-          totalEarnings: earning,
-        },
-      });
+    // ======================================
+    // AUDIT LOG
+    // ======================================
 
-      // Directly update base product stock balances cleanly
-      await tx.product.update({
-        where: { id: targetProduct.id },
-        data: {
-          stock: { decrement: item.quantity },
-          },
-        });
-    }
+    this.logger.log(`
+SETTLEMENT COMPLETE
+
+ITEM: ${item.id}
+
+GROSS: ${gross}
+
+PLATFORM COMMISSION: ${platformCommission}
+
+REFERRAL COST: ${referralVoucherAmount}
+
+MARKETER: ${marketerCommission}
+
+AVIORE: ${avioreCommission}
+
+VENDOR COUPON: ${vendorCouponAmount}
+
+VENDOR NET: ${vendorNetEarning}
+`);
   }
+}
 
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
