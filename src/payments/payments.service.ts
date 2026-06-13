@@ -9,7 +9,7 @@ import {
 import { PrismaService } from '../prisma.service';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import axios from 'axios';
-import { GrowthCommissionLedgerService } from 'src/growth/ledger/commission-ledger.service';
+import { GrowthCommissionLedgerService } from '../growth/ledger/commission-ledger.service';
 import { randomUUID } from 'crypto';
 
 const Flutterwave = require('flutterwave-node-v3');
