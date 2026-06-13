@@ -5,6 +5,7 @@ import { PaymentInitializerService } from './services/payment-initializer.servic
 import { AuditService } from './services/audit.service';
 import { SettlementProcessor } from './workers/settlement.processor';
 import { PrismaService } from '../prisma.service'; // Adjust relative import hierarchy path here
+import { PaymentsService } from './payments.service';
 
 @Module({
   imports: [
@@ -20,6 +21,6 @@ import { PrismaService } from '../prisma.service'; // Adjust relative import hie
     SettlementProcessor,
     PrismaService,
   ],
-  exports: [PaymentInitializerService, AuditService],
+  exports: [PaymentInitializerService, AuditService , PaymentsService],
 })
 export class PaymentsModule {}
