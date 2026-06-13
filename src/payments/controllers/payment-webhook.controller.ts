@@ -1,21 +1,30 @@
-import { Controller, Post, Body, Headers, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import {
+Body,
+Controller,
+Headers,
+Post,
+} from '@nestjs/common';
+
 import { PaymentWebhookService } from '../services/payment-webhook.service';
 
-@Controller('payments/webhook')
-export class PaymentWebhookController {
-  constructor(private readonly webhookService: PaymentWebhookService) {}
+@Controller('payments')
+export class PaymentsWebhookController {
+constructor(
+private readonly paymentWebhookService: PaymentWebhookService,
+) {}
 
-  @Post('flutterwave')
-  @HttpCode(HttpStatus.OK)
-  async handleFlutterwaveWebhook(
-    @Body() payload: any,
-    @Headers('verif-hash') signature: string,
-  ) {
-    if (!signature) {
-      throw new BadRequestException('Missing webhook signature verification token.');
-    }
+@Post('webhook')
+async flutterwaveWebhook(
+@Headers('verif-hash')
+signature: string,
 
-    await this.webhookService.processWebhook(payload, signature);
-    return { status: 'acknowledged' };
-  }
+@Body()
+body: any,
+
+) {
+return this.paymentWebhookService.handleWebhook(
+signature,
+body,
+);
+}
 }

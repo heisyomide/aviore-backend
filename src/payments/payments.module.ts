@@ -1,26 +1,58 @@
 import { Module } from '@nestjs/common';
+
 import { BullModule } from '@nestjs/bullmq';
+
+import { PrismaService } from '../prisma.service';
+
 import { PaymentsController } from './controllers/payments.controller';
+import { PaymentsWebhookController } from './controllers/payment-webhook.controller';
+
 import { PaymentInitializerService } from './services/payment-initializer.service';
+import { PaymentWebhookService } from './services/payment-webhook.service';
+import { SettlementService } from './services/settlement.service';
 import { AuditService } from './services/audit.service';
+import { ReconciliationService } from './services/reconciliation.service';
+
+import { SettlementQueue } from './queues/settlement.queue';
+
 import { SettlementProcessor } from './workers/settlement.processor';
-import { PrismaService } from '../prisma.service'; // Adjust relative import hierarchy path here
-import { PaymentsService } from './payments.service';
+import { DeadLetterProcessor } from './workers/dead-letter.processor';
 
 @Module({
-  imports: [
-    // Registers the 'settlement' message queue channel with BullMQ framework
-    BullModule.registerQueue({
-      name: 'settlement',
-    }),
-  ],
-  controllers: [PaymentsController],
-  providers: [
-    PaymentInitializerService,
-    AuditService,
-    SettlementProcessor,
-    PrismaService,
-  ],
-  exports: [PaymentInitializerService, AuditService , PaymentsService],
+imports: [
+BullModule.registerQueue(
+{
+name: 'settlement',
+},
+{
+name: 'dead-letter',
+},
+),
+],
+
+controllers: [
+PaymentsController,
+PaymentsWebhookController,
+],
+
+providers: [
+PrismaService,
+
+AuditService,
+PaymentInitializerService,
+PaymentWebhookService,
+SettlementService,
+ReconciliationService,
+SettlementQueue,
+SettlementProcessor,
+DeadLetterProcessor,
+
+],
+
+exports: [
+PaymentInitializerService,
+PaymentWebhookService,
+SettlementService,
+],
 })
 export class PaymentsModule {}
