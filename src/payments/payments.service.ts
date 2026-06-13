@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma.service';
 import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import axios from 'axios';
 import { GrowthCommissionLedgerService } from 'src/growth/ledger/commission-ledger.service';
+import { randomUUID } from 'crypto';
 
 const Flutterwave = require('flutterwave-node-v3');
 
@@ -96,7 +97,9 @@ export class PaymentsService implements OnModuleInit {
       throw new BadRequestException('ORDER_AMOUNT_INVALID');
     }
 
-    const txRef = `AVR-${order.id.split('-')[0].toUpperCase()}-${Date.now()}`;
+   const txRef =
+
+  `AVR-${randomUUID()}`
 
     const payload = {
       tx_ref: txRef,
@@ -141,6 +144,7 @@ export class PaymentsService implements OnModuleInit {
           reference: txRef,
           status: PaymentStatus.PENDING,
           provider: 'FLUTTERWAVE',
+          amount: order.totalAmount,
         },
       });
 
@@ -377,9 +381,8 @@ const products = await tx.product.findMany({
     // ORIGINAL PRODUCT VALUE
     // ======================================
 
-    const platformCommission =
-      gross * 0.1;
-
+ const platformCommission =
+  gross * this.COMMISSION_RATE;
     // ======================================
     // VENDOR BASE EARNING
     // ======================================
@@ -439,9 +442,12 @@ const products = await tx.product.findMany({
     // VENDOR NET
     // ======================================
 
-    const vendorNetEarning =
-      vendorBaseEarning -
-      vendorCouponAmount;
+const vendorNetEarning =
+  Math.max(
+    0,
+    vendorBaseEarning -
+      vendorCouponAmount,
+  );
 
     // ======================================
     // SAVE ORDER ITEM
@@ -532,6 +538,15 @@ if (
         marketerCommission,
     },
   });
+}
+
+if (
+  product.stock <
+  item.quantity
+) {
+  throw new BadRequestException(
+    `INSUFFICIENT_STOCK: ${product.id}`,
+  );
 }
 
     // ======================================

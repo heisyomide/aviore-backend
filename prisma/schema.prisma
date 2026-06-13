@@ -7,78 +7,62 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
-  ADMIN
-  VENDOR
-  CUSTOMER
-}
-
 model User {
-  id                   String               @id @default(uuid())
-  email                String               @unique
-  password             String
-  auditLogs            AuditLog[]
-  firstName            String?
-  lastName             String?
-  phone                String?
-  couponUsages         CouponUsage[]
-  isActive             Boolean              @default(true)
-  reviews              Review[]
-  wishlist             Wishlist[]
-  addresses            Address[]
-  followers            VendorFollower[]
-  browsingHistory      BrowsingHistory[]
-  cart                 Cart?
-  role                 Role                 @default(CUSTOMER)
-  createdAt            DateTime             @default(now())
-  vendor               Vendor?
-  pushToken            String?
-  orders               Order[]
-  refreshTokens        RefreshToken[]
-  is2faEnabled         Boolean              @default(false)
-  sessions             Session[] // Just add this one line heren
-  blockedIps           BlockedIp[]          @relation("AdminBlockedIps")
-  notificationSettings NotificationSetting? // <--- ADD THIS LINE
-  tickets              Ticket[]
-  returnRequests       ReturnRequest[]
-  conversations        OrderConversation[]
-  isEmailVerified      Boolean              @default(false)
-  // Growth & System Network Vectors
-  referralCode         String               @unique // Generated securely: e.g., AVR-X7F92
-  referredById         String?
-  referredBy           User?                @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
-  invitees             User[]               @relation("UserReferrals")
-
-  hasUnlockedVoucher     Boolean @default(false)
-  hasUsedReferralVoucher Boolean @default(false)
-
-  // Fingerprints & Logistics Telemetry
-  signupIp          String?
-  deviceFingerprint String?
-
-  // System Ledgers
-  vouchers          Voucher[]
-  sentReferrals     ReferralLog[] @relation("ReferrerRelation")
-  receivedReferrals ReferralLog[] @relation("ReferredUserRelation")
+  id                     String               @id @default(uuid())
+  email                  String               @unique
+  password               String
+  firstName              String?
+  lastName               String?
+  phone                  String?
+  isActive               Boolean              @default(true)
+  role                   Role                 @default(CUSTOMER)
+  createdAt              DateTime             @default(now())
+  pushToken              String?
+  is2faEnabled           Boolean              @default(false)
+  referralCode           String               @unique
+  referredById           String?
+  hasUnlockedVoucher     Boolean              @default(false)
+  hasUsedReferralVoucher Boolean              @default(false)
+  signupIp               String?
+  deviceFingerprint      String?
+  isEmailVerified        Boolean              @default(false)
+  addresses              Address[]
+  auditLogs              AuditLog[]
+  blockedIps             BlockedIp[]          @relation("AdminBlockedIps")
+  browsingHistory        BrowsingHistory[]
+  cart                   Cart?
+  notificationSettings   NotificationSetting?
+  orders                 Order[]
+  conversations          OrderConversation[]
+  receivedReferrals      ReferralLog[]        @relation("ReferredUserRelation")
+  sentReferrals          ReferralLog[]        @relation("ReferrerRelation")
+  refreshTokens          RefreshToken[]
+  returnRequests         ReturnRequest[]
+  reviews                Review[]
+  sessions               Session[]
+  tickets                Ticket[]
+  referredBy             User?                @relation("UserReferrals", fields: [referredById], references: [id])
+  invitees               User[]               @relation("UserReferrals")
+  vendor                 Vendor?
+  followers              VendorFollower[]
+  vouchers               Voucher[]
+  wishlist               Wishlist[]
 
   @@index([email])
 }
 
 model ReferralLog {
-  id                String  @id @default(uuid())
+  id                String   @id @default(uuid())
   referrerId        String
   referredUserId    String
   referralCodeUsed  String
   ipAddress         String?
   deviceFingerprint String?
-  isQualified       Boolean @default(false) // Flips true when referred user completes verification
-  isFraudulent      Boolean @default(false) // Flagged by threshold checking loops
-
-  // Explicit relations
-  referrer     User @relation("ReferrerRelation", fields: [referrerId], references: [id], onDelete: Cascade)
-  referredUser User @relation("ReferredUserRelation", fields: [referredUserId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
+  isQualified       Boolean  @default(false)
+  isFraudulent      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  referredUser      User     @relation("ReferredUserRelation", fields: [referredUserId], references: [id], onDelete: Cascade)
+  referrer          User     @relation("ReferrerRelation", fields: [referrerId], references: [id], onDelete: Cascade)
 
   @@index([referrerId])
   @@index([referredUserId])
@@ -86,56 +70,40 @@ model ReferralLog {
 
 model Voucher {
   id             String        @id @default(uuid())
-  code           String        @unique // Cryptographic format: e.g., VRF-8F12X
-  discountAmount Decimal       @db.Decimal(12, 2)
-  minimumOrder   Decimal       @db.Decimal(12, 2)
+  code           String        @unique
+  discountAmount Float         @default(2500)
+  minimumOrder   Float         @default(15000)
   status         VoucherStatus @default(ACTIVE)
   expiresAt      DateTime
   usedAt         DateTime?
-  orderId        String?
-  usedAmount     Decimal?      @db.Decimal(12, 2)
   userId         String
+  createdAt      DateTime      @default(now())
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
 
   @@index([userId])
 }
 
-enum VoucherStatus {
-  ACTIVE
-  USED
-  EXPIRED
-  CANCELLED
-}
-
 model VendorFollower {
-  id String @id @default(uuid())
-
-  // The Vendor being followed
-  vendorId String
-  vendor   Vendor @relation(fields: [vendorId], references: [id])
-
-  // The User who is following
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
-
+  id        String   @id @default(uuid())
+  vendorId  String
+  userId    String
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
 
-  // Ensures a user can't follow the same vendor twice
   @@unique([vendorId, userId])
 }
 
 model Session {
   id                String   @id @default(uuid())
   userId            String
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshToken      String
-  deviceFingerprint String?
-  device            String // e.g., "iPhone 15, Chrome on Windows"
+  device            String
   ipAddress         String
   lastUsed          DateTime @default(now())
   isCurrent         Boolean  @default(false)
+  deviceFingerprint String?
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model BlockedIp {
@@ -143,8 +111,8 @@ model BlockedIp {
   ip        String   @unique
   reason    String?
   adminId   String
-  admin     User     @relation("AdminBlockedIps", fields: [adminId], references: [id])
   createdAt DateTime @default(now())
+  admin     User     @relation("AdminBlockedIps", fields: [adminId], references: [id])
 }
 
 model LoginLog {
@@ -152,15 +120,14 @@ model LoginLog {
   email             String
   ip                String
   userAgent         String?
-  deviceFingerprint String?
-  status            String // "SUCCESS" or "FAILED"
+  status            String
   createdAt         DateTime @default(now())
+  deviceFingerprint String?
 }
 
 model NotificationSetting {
   id            String  @id @default(uuid())
   userId        String  @unique
-  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   orderUpdates  Boolean @default(true)
   promotions    Boolean @default(false)
   chatMessages  Boolean @default(true)
@@ -169,6 +136,7 @@ model NotificationSetting {
   emailEnabled  Boolean @default(true)
   smsEnabled    Boolean @default(false)
   pushEnabled   Boolean @default(true)
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Banner {
@@ -186,34 +154,29 @@ model Banner {
   updatedAt   DateTime @updatedAt
 }
 
-// Add this line to your User model:
-// notificationSettings NotificationSetting?
-
 model Address {
   id          String   @id @default(uuid())
-  fullName    String // Added for "John Doe"
-  phoneNumber String // Added for "+234..."
+  fullName    String
+  phoneNumber String
   street      String
   city        String
   state       String
-  postalCode  String? // Made optional with ?
+  postalCode  String?
   isDefault   Boolean  @default(false)
   userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  orders      Order[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id])
+  orders      Order[]
 }
 
 model Wishlist {
-  id     String @id @default(uuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id        String   @id @default(uuid())
+  userId    String
   productId String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
   createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, productId])
   @@index([userId])
@@ -225,18 +188,10 @@ model BrowsingHistory {
   userId    String
   productId String
   viewedAt  DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
 
-  user    User    @relation(fields: [userId], references: [id])
-  product Product @relation(fields: [productId], references: [id])
-
-  @@unique([userId, productId]) // Keeps history clean (no duplicates)
-}
-
-enum KycStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  NOT_SUBMITTED
+  @@unique([userId, productId])
 }
 
 model Vendor {
@@ -245,61 +200,653 @@ model Vendor {
   imageUrl             String?
   isVerified           Boolean               @default(false)
   userId               String                @unique
-  user                 User                  @relation(fields: [userId], references: [id])
-  // Relations
-  products             Product[]
-  coupons              Coupon[] // <--- Add this line
-  orders               Order[]
-  transactions         WalletTransaction[]
-  campaignParticipants CampaignParticipant[]
-  campaignProducts     CampaignProduct[]
-  bankName             String? // Ensure these are inside the Vendor model
-  accountNumber        String? // Ensure these are inside the Vendor model
-  // ... rest of model
-  bankCode             String?
-  accountName          String?
-  slug                 String?               @unique // Add this for the URL
-  description          String?               @db.Text // Add this for the About section
-  shippingFee          Decimal               @default(0.00) @db.Decimal(12, 2)
-  commission           Decimal               @default(10.00) @db.Decimal(5, 2)
+  bankName             String?
+  accountNumber        String?
+  slug                 String?               @unique
+  description          String?
+  shippingFee          Float                 @default(0.0)
+  commission           Float                 @default(10.0)
   walletBalance        Decimal               @default(0.0)
   status               VendorStatus          @default(ACTIVE)
   createdAt            DateTime              @default(now())
-  followers            VendorFollower[]
   kycStatus            KycStatus             @default(NOT_SUBMITTED)
-  idType               String? // e.g., NIN, Driver's License, International Passport
+  idType               String?
   idNumber             String?
-  idImage              String? // URL to the uploaded image
-  reviews              Review[]
-  withdrawalRequests   WithdrawalRequest[]
-  vendorWallet         VendorWallet?
-
+  idImage              String?
+  accountName          String?
+  bankCode             String?
   growthStatus         GrowthVendorStatus    @default(PENDING)
-  verifiedProducts     Int                   @default(0) // Live tracking counter updated via product lifecycle hooks
   marketerId           String?
-  marketer             Marketer?             @relation("MarketerToVendor", fields: [marketerId], references: [id], onDelete: SetNull)
+  verifiedProducts     Int                   @default(0)
+  campaignParticipants CampaignParticipant[]
+  campaignProducts     CampaignProduct[]
+  coupons              Coupon[]
   growthCommissionLogs GrowthCommissionLog[]
-  orderItems           OrderItem[]
+  orders               Order[]
+  products             Product[]
+  reviews              Review[]
+  marketer             Marketer?             @relation("MarketerToVendor", fields: [marketerId], references: [id])
+  user                 User                  @relation(fields: [userId], references: [id])
+  followers            VendorFollower[]
+  vendorWallet         VendorWallet?
+  transactions         WalletTransaction[]
+  withdrawalRequests   WithdrawalRequest[]
 
   @@index([marketerId])
   @@index([growthStatus])
 }
 
 model ProductCoupon {
-  id        String @id @default(cuid())
+  id        String   @id @default(cuid())
   productId String
   couponId  String
   vendorId  String
+  createdAt DateTime @default(now())
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  // Relations
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-  coupon  Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  @@unique([productId, couponId])
+  @@index([couponId])
+  @@index([vendorId])
+}
+
+model Coupon {
+  id                String          @id @default(cuid())
+  code              String          @unique
+  description       String?
+  type              CouponType      @default(VENDOR)
+  discountType      DiscountType    @default(PERCENTAGE)
+  discountValue     Decimal         @db.Decimal(10, 2)
+  maxDiscountAmount Decimal?        @db.Decimal(10, 2)
+  minOrderValue     Decimal?        @db.Decimal(10, 2)
+  usageLimit        Int             @default(100)
+  usedCount         Int             @default(0)
+  perUserLimit      Int             @default(1)
+  vendorId          String?
+  startDate         DateTime        @default(now())
+  endDate           DateTime
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  vendor            Vendor?         @relation(fields: [vendorId], references: [id])
+  Order             Order[]
+  productCoupons    ProductCoupon[]
+  usages    CouponUsage[]
+  @@index([code])
+  @@index([vendorId])
+  @@index([isActive, startDate, endDate])
+}
+
+model CouponUsage {
+  id        String   @id @default(uuid())
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id])
+  userId    String
+  createdAt DateTime @default(now())
+}
+
+model Announcement {
+  id          String               @id @default(cuid())
+  title       String
+  content     String
+  targetGroup AnnouncementTarget
+  adminId     String
+  priority    AnnouncementPriority @default(NORMAL)
+  expiresAt   DateTime?
+  isActive    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+}
+
+model WalletTransaction {
+  id                  String             @id @default(uuid())
+  vendorId            String
+  amount              Decimal
+  metadata            Json?
+  type                TransactionType
+  status              String             @default("COMPLETED")
+  reference           String             @unique
+  description         String?
+  createdAt           DateTime           @default(now())
+  withdrawalRequestId String?
+  vendor              Vendor             @relation(fields: [vendorId], references: [id])
+  withdrawalRequest   WithdrawalRequest? @relation(fields: [withdrawalRequestId], references: [id])
+}
+
+model Product {
+  id               String            @id @default(uuid())
+  title            String
+  description      String
+  price            Decimal           @db.Decimal(12, 2)
+  stock            Int               @default(0)
+  sku              String?           @unique
+  status           ProductStatus     @default(PENDING)
+  isActive         Boolean           @default(true)
+  isDeleted        Boolean           @default(false)
+  vendorId         String
+  origin           String            @default("LOCAL")
+  deliveryMin      Int               @default(1)
+  deliveryMax      Int               @default(3)
+  storeId          String?
+  categoryId       String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  averageRating    Float             @default(0)
+  reviewCount      Int               @default(0)
+  oldPrice         Float?
+  browsingHistory  BrowsingHistory[]
+  campaignProducts CampaignProduct[]
+  cartItems        CartItem[]
+  orderItems       OrderItem[]
+  category         Category          @relation(fields: [categoryId], references: [id])
+  vendor           Vendor            @relation(fields: [vendorId], references: [id])
+  productCoupons   ProductCoupon[]
+  images           ProductImage[]
+  variants         ProductVariant[]
+  reviews          Review[]
+  wishlist         Wishlist[]
+
+  @@index([vendorId])
+  @@index([categoryId])
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  imageUrl  String
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+}
+
+model ProductVariant {
+  id         String         @id @default(uuid())
+  productId  String
+  color      String?
+  size       String?
+  material   String?
+  price      Decimal?       @db.Decimal(12, 2)
+  stock      Int            @default(0)
+  sku        String?        @unique
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  product    Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  images     VariantImage[]
+
+  @@unique([productId, color, size, material])
+}
+
+model VariantImage {
+  id               String         @id @default(uuid())
+  imageUrl         String
+  productVariantId String
+  variant          ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id                   String               @id @default(uuid())
+  orderNumber          String?              @unique @default(cuid())
+  totalAmount          Decimal              @db.Decimal(12, 2)
+  totalPaid            Decimal?             @db.Decimal(12, 2)
+  commission           Decimal?             @db.Decimal(12, 2)
+  vendorEarning        Decimal?             @db.Decimal(12, 2)
+  status               OrderStatus          @default(PENDING)
+  payoutStatus         PayoutStatus         @default(LOCKED)
+  trackingNumber       String?
+  carrier              String?
+  vendorId             String?
+  userId               String
+  addressId            String?
+  couponId             String?
+  createdAt            DateTime             @default(now())
+  dispute              Dispute?
+  growthCommissionLogs GrowthCommissionLog?
+  address              Address?             @relation(fields: [addressId], references: [id])
+  Coupon               Coupon?              @relation(fields: [couponId], references: [id])
+  user                 User                 @relation(fields: [userId], references: [id])
+  vendor               Vendor?              @relation(fields: [vendorId], references: [id])
+  campaignLogs         OrderCampaign[]
+  orderConversation    OrderConversation?
+  items                OrderItem[]
+  payment              Payment?
+  returnRequest        ReturnRequest?
+}
+
+model OrderCampaign {
+  id             String   @id @default(uuid())
+  orderId        String
+  title          String
+  discountAmount Float
+  createdAt      DateTime @default(now())
+  order          Order    @relation(fields: [orderId], references: [id])
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id])
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String          @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int             @default(1)
+  createdAt DateTime        @default(now())
+  variantId String?
+  cart      Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product         @relation(fields: [productId], references: [id])
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+
+  @@unique([cartId, productId, variantId])
+  @@index([cartId])
+  @@index([productId])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  rating    Int
+  comment   String?
+  reply     String?
+  productId String
+  userId    String
+  vendorId  String
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@unique([productId, userId])
+}
+
+model OrderItem {
+  id                    String          @id @default(uuid())
+  quantity              Int
+  priceAtPurchase       Decimal         @db.Decimal(12, 2)
+  orderId               String
+  productId             String
+  commission            Float?
+  vendorEarning         Float?
+  payoutStatus          String?         @default("PENDING")
+  createdAt             DateTime        @default(now())
+  variantId             String?
+  retailAmount          Decimal?        @db.Decimal(12, 2)
+  vendorCouponDiscount  Decimal?        @db.Decimal(12, 2)
+  referralDiscount      Decimal?        @db.Decimal(12, 2)
+  customerPaid          Decimal?        @db.Decimal(12, 2)
+  platformCommission    Decimal?        @db.Decimal(12, 2)
+  vendorId              String?
+  couponId              String?
+  platformNetCommission Decimal?        @db.Decimal(12, 2)
+  marketingCommission   Decimal?        @db.Decimal(12, 2)
+  order                 Order           @relation(fields: [orderId], references: [id])
+  product               Product         @relation(fields: [productId], references: [id])
+  variant               ProductVariant? @relation(fields: [variantId], references: [id])
+}
+
+model Payment {
+  id        String @id @default(uuid())
+  reference String @unique
+
+  amount Decimal @db.Decimal(12, 2)
+
+  status PaymentStatus @default(PENDING)
+
+  provider String
+
+  orderId String @unique
+
+  metadata String?
+
+  externalId String?
 
   createdAt DateTime @default(now())
 
-  @@unique([productId, couponId]) // Ensures an artifact doesn't join the same event twice
-  @@index([couponId])
+  order     Order             @relation(fields: [orderId], references: [id])
+  auditLogs PaymentAuditLog[]
+}
+
+model WithdrawalRequest {
+  id                 String              @id @default(uuid())
+  amount             Decimal             @db.Decimal(12, 2)
+  status             WithdrawalStatus    @default(PENDING)
+  vendorId           String
+  bankDetails        Json
+  createdAt          DateTime            @default(now())
+  metadata           Json?
+  updatedAt          DateTime            @updatedAt
+  walletTransactions WalletTransaction[]
+  vendor             Vendor              @relation(fields: [vendorId], references: [id])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Category {
+  id        String     @id @default(uuid())
+  name      String
+  slug      String     @unique
+  parentId  String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  parent    Category?  @relation("CategoryToSub", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryToSub")
+  products  Product[]
+
+  @@index([parentId])
+}
+
+model OrderConversation {
+  id        String         @id @default(cuid())
+  orderId   String         @unique
+  userId    String
+  vendorId  String
+  isFrozen  Boolean        @default(false)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  order     Order          @relation(fields: [orderId], references: [id])
+  user      User           @relation(fields: [userId], references: [id])
+  messages  OrderMessage[]
+}
+
+model OrderMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  senderId       String
+  senderRole     String
+  content        String
+  type           String            @default("TEXT")
+  isFlagged      Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  conversation   OrderConversation @relation(fields: [conversationId], references: [id])
+}
+
+model ReturnRequest {
+  id            String   @id @default(cuid())
+  orderId       String   @unique
+  userId        String
+  vendorId      String
+  reason        String
+  description   String
+  imageProof    String?
+  status        String   @default("REQUESTED")
+  adminDecision String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+  order         Order    @relation(fields: [orderId], references: [id])
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model VendorWallet {
+  id               String   @id @default(cuid())
+  vendorId         String   @unique
+  pendingBalance   Decimal  @default(0.00) @db.Decimal(12, 2)
+  availableBalance Decimal  @default(0.00) @db.Decimal(12, 2)
+  totalEarnings    Decimal  @default(0.00) @db.Decimal(12, 2)
+  bankName         String?
+  accountNumber    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  vendor           Vendor   @relation(fields: [vendorId], references: [id])
+}
+
+model Ticket {
+  id        String       @id @default(cuid())
+  userId    String
+  subject   String
+  message   String
+  status    TicketStatus @default(OPEN)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @default(now()) @updatedAt
+  user      User         @relation(fields: [userId], references: [id])
+}
+
+model FAQ {
+  id       String @id @default(cuid())
+  question String
+  answer   String
+  category String
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  adminId    String
+  action     AuditAction
+  targetId   String?
+  targetType String?
+  details    String?
+  ipAddress  String?
+  createdAt  DateTime    @default(now())
+  admin      User        @relation(fields: [adminId], references: [id])
+
+  @@index([adminId])
+  @@index([targetId])
+  @@index([createdAt])
+}
+
+model Campaign {
+  id           String                @id @default(cuid())
+  title        String
+  description  String
+  discount     Float
+  bannerUrl    String?
+  startDate    DateTime
+  endDate      DateTime
+  isActive     Boolean               @default(true)
+  createdAt    DateTime              @default(now())
+  participants CampaignParticipant[]
+  products     CampaignProduct[]
+}
+
+model CampaignParticipant {
+  id         String   @id @default(cuid())
+  campaignId String
+  vendorId   String
+  joinedAt   DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@unique([campaignId, vendorId])
+}
+
+model CampaignProduct {
+  id         String   @id @default(cuid())
+  campaignId String
+  productId  String
+  vendorId   String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+  vendor     Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@unique([campaignId, productId])
+}
+
+model FraudLog {
+  id          String        @id @default(cuid())
+  userId      String?
+  vendorId    String?
+  orderId     String?
+  severity    FraudSeverity
+  type        FraudType
+  description String
+  isResolved  Boolean       @default(false)
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+
+  @@index([userId])
   @@index([vendorId])
+}
+
+model Dispute {
+  id           String            @id @default(cuid())
+  orderId      String            @unique
+  customerId   String
+  vendorId     String
+  reason       String
+  status       DisputeStatus     @default(OPEN)
+  refundAmount Decimal?          @db.Decimal(10, 2)
+  resolution   String?
+  adminId      String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  order        Order             @relation(fields: [orderId], references: [id])
+  evidences    DisputeEvidence[]
+  messages     DisputeMessage[]
+}
+
+model DisputeEvidence {
+  id         String   @id @default(cuid())
+  disputeId  String
+  url        String
+  uploadedBy String
+  createdAt  DateTime @default(now())
+  dispute    Dispute  @relation(fields: [disputeId], references: [id])
+}
+
+model DisputeMessage {
+  id        String   @id @default(cuid())
+  disputeId String
+  senderId  String
+  message   String
+  createdAt DateTime @default(now())
+  dispute   Dispute  @relation(fields: [disputeId], references: [id])
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model Marketer {
+  id              String                @id @default(uuid())
+  name            String
+  teamCode        String
+  passcodeHash    String
+  role            MarketerRole          @default(SUB_MARKETER)
+  status          MarketerStatus        @default(ACTIVE)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  accountName     String?
+  accountNumber   String?               @db.VarChar(10)
+  bankName        String?               @default("Access Bank Plc")
+  trackingTag     String?               @unique
+  totalEarnings   Decimal?              @default(0.00) @db.Decimal(12, 2)
+  currentBalance  Decimal?              @default(0.00) @db.Decimal(12, 2)
+  withdrawnAmount Decimal?              @default(0.00) @db.Decimal(12, 2)
+  referralCode    String?
+  commissionLogs  GrowthCommissionLog[]
+  payouts         GrowthPayoutRequest[]
+  settings        MarketerSettings?
+  wallet          MarketingWallet?
+  vendors         Vendor[]              @relation("MarketerToVendor")
+
+  @@unique([teamCode, passcodeHash])
+  @@index([teamCode])
+}
+
+model MarketerSettings {
+  id                    String   @id @default(uuid())
+  marketerId            String   @unique
+  onVendorSignup        Boolean  @default(true)
+  onSaleDelivered       Boolean  @default(true)
+  onPayoutSettled       Boolean  @default(true)
+  weeklyDigest          Boolean  @default(false)
+  globalAllocationSplit Int      @default(20)
+  voucherSignLimit      Int      @default(5)
+  updatedAt             DateTime @updatedAt
+  marketer              Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+}
+
+model MarketingWallet {
+  id            String   @id @default(uuid())
+  marketerId    String   @unique
+  balance       Decimal  @default(0.00) @db.Decimal(12, 2)
+  bankName      String?
+  accountNumber String?
+  accountName   String?
+  updatedAt     DateTime @updatedAt
+  marketer      Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+}
+
+model GrowthCommissionLog {
+  id                       String   @id @default(uuid())
+  orderId                  String   @unique
+  marketerId               String
+  vendorId                 String
+  grossOrderAmount         Float
+  platformFeeRetained      Float
+  marketingSplitPaid       Float
+  vendorPayoutAmount       Float
+  createdAt                DateTime @default(now())
+  orderItemId              String?
+  retailAmount             Decimal? @default(0) @db.Decimal(12, 2)
+  vendorCouponDiscount     Decimal? @default(0) @db.Decimal(12, 2)
+  referralDiscount         Decimal? @default(0) @db.Decimal(12, 2)
+  customerPaid             Decimal? @default(0) @db.Decimal(12, 2)
+  vendorPayout             Decimal? @default(0) @db.Decimal(12, 2)
+  platformGrossCommission  Decimal? @default(0) @db.Decimal(12, 2)
+  platformNetCommission    Decimal? @default(0) @db.Decimal(12, 2)
+  marketerCommission       Decimal? @default(0) @db.Decimal(12, 2)
+  avioreCommission         Decimal? @default(0) @db.Decimal(12, 2)
+  commissionType           String?  @default("ORGANIC")
+  paymentGatewayReference  String?
+  flutterwaveTransactionId String?
+  marketer                 Marketer @relation(fields: [marketerId], references: [id])
+  order                    Order    @relation(fields: [orderId], references: [id])
+  vendor                   Vendor   @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+  @@index([marketerId])
+  @@index([marketerId], map: "idx_growth_marketer")
+  @@index([orderId], map: "idx_growth_order")
+  @@index([orderItemId], map: "idx_growth_order_item")
+  @@index([vendorId], map: "idx_growth_vendor")
+}
+
+model GrowthPayoutRequest {
+  id              String             @id @default(uuid())
+  marketerId      String
+  amount          Float
+  status          GrowthPayoutStatus @default(PENDING)
+  referenceString String             @unique
+  bankName        String
+  accountNumber   String
+  accountName     String
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  marketer        Marketer           @relation(fields: [marketerId], references: [id])
+
+  @@index([marketerId])
+}
+
+enum Role {
+  ADMIN
+  VENDOR
+  CUSTOMER
+}
+
+enum VoucherStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NOT_SUBMITTED
 }
 
 enum CouponType {
@@ -311,76 +858,6 @@ enum CouponType {
 enum DiscountType {
   PERCENTAGE
   FIXED_AMOUNT
-}
-
-model Coupon {
-  id          String  @id @default(cuid())
-  code        String  @unique
-  description String?
-
-  type           CouponType      @default(VENDOR)
-  discountType   DiscountType    @default(PERCENTAGE)
-  discountValue  Decimal         @db.Decimal(10, 2)
-  productCoupons ProductCoupon[]
-
-  maxDiscountAmount Decimal?      @db.Decimal(10, 2)
-  usages            CouponUsage[]
-  minOrderValue     Decimal?      @db.Decimal(10, 2)
-
-  usageLimit   Int @default(100)
-  usedCount    Int @default(0)
-  perUserLimit Int @default(1)
-
-  vendorId String?
-  vendor   Vendor? @relation(fields: [vendorId], references: [id])
-
-  startDate DateTime @default(now())
-  endDate   DateTime
-  isActive  Boolean  @default(true)
-
-  createdAt  DateTime    @default(now())
-  orderItems OrderItem[]
-
-  @@index([code])
-  @@index([vendorId])
-  @@index([isActive, startDate, endDate])
-}
-
-model CouponUsage {
-  id              String   @id @default(uuid())
-  couponId        String
-  userId          String
-  orderId         String
-  discountApplied Decimal  @db.Decimal(12, 2)
-  createdAt       DateTime @default(now())
-
-  // 🛡️ Explicit Database Relation Mapping
-  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@index([couponId])
-  @@index([userId])
-  @@index([orderId]) // Added index for fast order reconciliation searches
-}
-
-model Announcement {
-  id String @id @default(cuid())
-
-  title   String
-  content String @db.Text
-
-  targetGroup AnnouncementTarget
-
-  adminId String
-
-  priority AnnouncementPriority @default(NORMAL)
-
-  expiresAt DateTime?
-
-  isActive Boolean @default(true)
-
-  createdAt DateTime @default(now())
 }
 
 enum AnnouncementTarget {
@@ -396,21 +873,6 @@ enum AnnouncementPriority {
   URGENT
 }
 
-model WalletTransaction {
-  id                  String             @id @default(uuid())
-  vendorId            String
-  amount              Decimal            @db.Decimal(12, 2)
-  withdrawalRequestId String?
-  withdrawalRequest   WithdrawalRequest? @relation(fields: [withdrawalRequestId], references: [id])
-  metadata            Json?
-  type                TransactionType
-  status              String             @default("COMPLETED") // PENDING, COMPLETED, FAILED
-  reference           String             @unique // tx_ref or payout_ref
-  description         String?
-  createdAt           DateTime           @default(now())
-  vendor              Vendor             @relation(fields: [vendorId], references: [id])
-}
-
 enum VendorStatus {
   ACTIVE
   SUSPENDED
@@ -418,47 +880,10 @@ enum VendorStatus {
 }
 
 enum TransactionType {
-  SALE // Money coming in from an order
-  WITHDRAW // Money going out to vendor's bank
-  REFUND // Money being moved back to customer
+  SALE
+  WITHDRAW
+  REFUND
   SALE_SETTLEMENT
-}
-
-model Product {
-  id               String            @id @default(uuid())
-  title            String
-  description      String
-  price            Decimal           @db.Decimal(12, 2)
-  oldPrice         Float?
-  stock            Int               @default(0)
-  sku              String?           @unique
-  status           ProductStatus     @default(PENDING)
-  variants         ProductVariant[]
-  isActive         Boolean           @default(true)
-  isDeleted        Boolean           @default(false)
-  vendor           Vendor            @relation(fields: [vendorId], references: [id])
-  vendorId         String
-  origin           String            @default("LOCAL")
-  deliveryMin      Int               @default(1)
-  deliveryMax      Int               @default(3)
-  storeId          String?
-  cartItems        CartItem[]
-  category         Category          @relation(fields: [categoryId], references: [id])
-  categoryId       String
-  wishlist         Wishlist[]
-  productCoupons   ProductCoupon[]
-  browsingHistory  BrowsingHistory[]
-  campaignProducts CampaignProduct[]
-  images           ProductImage[]
-  reviews          Review[]
-  orderItems       OrderItem[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  averageRating    Float             @default(0) // Ensure this exists
-  reviewCount      Int               @default(0) // Ensure this exists
-
-  @@index([vendorId])
-  @@index([categoryId])
 }
 
 enum ProductOrigin {
@@ -472,92 +897,11 @@ enum ProductStatus {
   REJECTED
 }
 
-model ProductImage {
-  id        String  @id @default(uuid())
-  imageUrl  String
-  product   Product @relation(fields: [productId], references: [id])
-  productId String
-}
-
-model ProductVariant {
-  id         String      @id @default(uuid())
-  productId  String
-  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orderItems OrderItem[]
-  color      String?
-  size       String?
-  material   String? // Optional: for future proofing
-
-  // Overrides: If null, the system falls back to Product.basePrice
-  price Decimal? @db.Decimal(12, 2)
-  stock Int      @default(0)
-  sku   String?  @unique
-
-  images VariantImage[]
-
-  isActive  Boolean    @default(true)
-  createdAt DateTime   @default(now())
-  cartItems CartItem[]
-
-  @@unique([productId, color, size, material])
-}
-
-model VariantImage {
-  id               String         @id @default(uuid())
-  imageUrl         String
-  productVariantId String
-  variant          ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
-}
-
-model Order {
-  id          String  @id @default(uuid())
-  orderNumber String? @unique @default(cuid())
-
-  totalAmount Decimal  @db.Decimal(12, 2)
-  totalPaid   Decimal? @db.Decimal(12, 2)
-
-  couponUsages CouponUsage[]
-  status       OrderStatus   @default(PENDING)
-  payoutStatus PayoutStatus  @default(LOCKED)
-
-  trackingNumber String?
-  carrier        String?
-
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  addressId String?
-  address   Address? @relation(fields: [addressId], references: [id])
-
-  // Fixed Bidirectional Relations Array Blocks
-  items                OrderItem[]
-  payment              Payment?
-  returnRequest        ReturnRequest?
-  orderConversation    OrderConversation?
-  dispute              Dispute?
-  campaignLogs         OrderCampaign[]
-  growthCommissionLogs GrowthCommissionLog[] // 🎯 Fixed: Changed from 1-to-1 to an array support channel
-
-  createdAt DateTime @default(now())
-  vendor    Vendor?  @relation(fields: [vendorId], references: [id])
-  vendorId  String?
-}
-
-model OrderCampaign {
-  id             String   @id @default(uuid())
-  orderId        String
-  order          Order    @relation(fields: [orderId], references: [id])
-  title          String // e.g., "Summer Sale 2024"
-  discountAmount Float
-  createdAt      DateTime @default(now())
-}
-
-// Ensure this Enum is at the bottom of your schema file
 enum PayoutStatus {
-  PENDING
-  LOCKED // Funds held in platform escrow
-  AVAILABLE // 48h window passed, vendor can withdraw
-  PAID // Withdrawal successful
-  REFUNDED // Order returned, funds sent back to customer
+  LOCKED
+  AVAILABLE
+  PAID
+  REFUNDED
 }
 
 enum OrderStatus {
@@ -570,104 +914,112 @@ enum OrderStatus {
   COMPLETED
 }
 
-// schema.prisma
-
-model Cart {
-  id        String     @id @default(uuid())
-  userId    String     @unique // 🛡️ Strictly one cart per user
-  user      User       @relation(fields: [userId], references: [id])
-  items     CartItem[] // 🛡️ Relation to the items inside
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-}
-
-model CartItem {
-  id        String   @id @default(cuid())
-  cartId    String
-  productId String
-  variantId String?
-  quantity  Int      @default(1)
-  createdAt DateTime @default(now())
-
-  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id])
-
-  variant ProductVariant? @relation(fields: [variantId], references: [id])
-
-  @@unique([cartId, productId, variantId])
-  @@index([cartId])
-  @@index([productId])
-}
-
-// Add this to your schema.prisma
-model Review {
-  id        String   @id @default(uuid())
-  rating    Int
-  comment   String?
-  reply     String?
-  productId String
-  product   Product  @relation(fields: [productId], references: [id])
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  vendorId  String
-  vendor    Vendor   @relation(fields: [vendorId], references: [id])
-  createdAt DateTime @default(now())
-
-  @@unique([productId, userId])
-}
-
-model OrderItem {
-  id                   String                @id @default(uuid())
-  quantity             Int
-  variantId            String?
-  variant              ProductVariant?       @relation(fields: [variantId], references: [id])
-  priceAtPurchase      Decimal               @db.Decimal(12, 2)
-  order                Order                 @relation(fields: [orderId], references: [id])
-  orderId              String
-  product              Product               @relation(fields: [productId], references: [id])
-  productId            String
-  growthCommissionLogs GrowthCommissionLog[]
-  vendorId             String
-  vendor               Vendor                @relation(fields: [vendorId], references: [id])
-  // --- NEW FINANCIAL FIELDS ---
-  retailAmount         Decimal?              @db.Decimal(12, 2)
-
-  vendorCouponDiscount Decimal? @db.Decimal(12, 2)
-
-  referralDiscount Decimal? @db.Decimal(12, 2)
-
-  customerPaid Decimal? @db.Decimal(12, 2)
-
-  platformCommission Decimal? @db.Decimal(12, 2)
-
-  vendorEarning Decimal? @db.Decimal(12, 2)
-
-  payoutStatus String? @default("PENDING")
-  commission         Decimal  @default(0.00) @db.Decimal(10, 2)
-  platformNetCommission Decimal? @db.Decimal(12, 2)
-  marketingCommission   Decimal? @db.Decimal(12, 2)
-
-  couponId  String?
-  coupon    Coupon?  @relation(fields: [couponId], references: [id])
-  createdAt DateTime @default(now())
-}
-
-model Payment {
-  id         String        @id @default(uuid())
-  reference  String        @unique
-  status     PaymentStatus @default(PENDING)
-  provider   String
-  order      Order         @relation(fields: [orderId], references: [id])
-  orderId    String        @unique
-  metadata   String?
-  externalId String?
-  createdAt  DateTime      @default(now())
-}
-
 enum PaymentStatus {
   PENDING
   SUCCESSFUL
   FAILED
+}
+
+// =========================================================================
+// ENTERPRISE PAYMENT & LEDGER SUB-DOMAIN (AVIORÈ FINANCIAL LAYER)
+// =========================================================================
+
+model WebhookEvent {
+  id          String   @id @default(uuid())
+  eventId     String   @unique // Flutterwave's explicit event ID or compound hash
+  provider    String // e.g., "FLUTTERWAVE"
+  eventType   String // e.g., "charge.completed"
+  processed   Boolean  @default(false)
+  processedAt DateTime @default(now())
+
+  @@index([eventId])
+}
+
+model PaymentAuditLog {
+  id        String          @id @default(uuid())
+  paymentId String
+  event     PaymentLogEvent
+  payload   Json
+  createdAt DateTime        @default(now())
+  payment   Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([event])
+}
+
+enum PaymentLogEvent {
+  PAYMENT_INITIALIZED
+  WEBHOOK_RECEIVED
+  VERIFICATION_STARTED
+  VERIFICATION_SUCCESS
+  VERIFICATION_FAILED
+  SETTLEMENT_QUEUED
+  SETTLEMENT_PROCESSING
+  SETTLEMENT_COMPLETED
+  SETTLEMENT_FAILED
+}
+
+model FinancialLedger {
+  id            String     @id @default(uuid())
+  reference     String     @unique // Compound tracking reference (e.g., TX-REF or JobID)
+  walletId      String // Maps to VendorWallet ID, MarketingWallet ID, or Platform account
+  walletType    WalletType
+  type          LedgerType
+  amount        Decimal    @db.Decimal(12, 2)
+  balanceBefore Decimal    @db.Decimal(12, 2)
+  balanceAfter  Decimal    @db.Decimal(12, 2)
+  description   String
+  metadata      Json?
+  createdAt     DateTime   @default(now())
+
+  @@index([walletId, walletType])
+  @@index([createdAt])
+}
+
+enum WalletType {
+  VENDOR
+  MARKETER
+  PLATFORM_RESERVE
+}
+
+enum LedgerType {
+  DEBIT // Money moving OUT of the wallet
+  CREDIT // Money moving INTO the wallet
+}
+
+model ReconciliationException {
+  id               String               @id @default(uuid())
+  paymentReference String               @unique
+  reason           String
+  severity         FraudSeverity        @default(HIGH)
+  status           ReconciliationStatus @default(UNRESOLVED)
+  details          Json?
+  resolvedBy       String?
+  resolvedAt       DateTime?
+  createdAt        DateTime             @default(now())
+
+  @@index([status])
+}
+
+enum ReconciliationStatus {
+  UNRESOLVED
+  INVESTIGATING
+  RESOLVED_MANUALLY
+  IGNORED
+}
+
+model DeadLetterJob {
+  id         String   @id @default(uuid())
+  queueName  String
+  jobName    String
+  jobId      String   @unique
+  payload    Json
+  reason     String
+  stackTrace String?
+  isResolved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([isResolved])
 }
 
 enum WithdrawalStatus {
@@ -678,147 +1030,11 @@ enum WithdrawalStatus {
   COMPLETED
 }
 
-model WithdrawalRequest {
-  id                 String              @id @default(uuid())
-  amount             Decimal             @db.Decimal(12, 2)
-  status             WithdrawalStatus    @default(PENDING)
-  vendorId           String
-  vendor             Vendor              @relation(fields: [vendorId], references: [id])
-  bankDetails        Json
-  createdAt          DateTime            @default(now())
-  metadata           Json?
-  updatedAt          DateTime            @updatedAt
-  walletTransactions WalletTransaction[]
-}
-
-model RefreshToken {
-  id        String   @id @default(uuid())
-  token     String   @unique
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String
-  expiresAt DateTime
-}
-
-model Category {
-  id   String @id @default(uuid())
-  name String
-  slug String @unique // e.g., "men-shoes" for clean URLs
-
-  // Self-referencing relationship
-  parentId String?
-  parent   Category?  @relation("CategoryToSub", fields: [parentId], references: [id])
-  children Category[] @relation("CategoryToSub")
-
-  products  Product[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  @@index([parentId])
-}
-
-// Support & Financial Core
-model OrderConversation {
-  id        String         @id @default(cuid())
-  orderId   String         @unique
-  order     Order          @relation(fields: [orderId], references: [id])
-  userId    String
-  vendorId  String
-  isFrozen  Boolean        @default(false)
-  messages  OrderMessage[]
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  user      User           @relation(fields: [userId], references: [id])
-}
-
-model OrderMessage {
-  id             String            @id @default(cuid())
-  conversationId String
-  conversation   OrderConversation @relation(fields: [conversationId], references: [id])
-  senderId       String
-  senderRole     String // "USER", "VENDOR", "ADMIN"
-  content        String
-  type           String            @default("TEXT") // "TEXT", "IMAGE", "SYSTEM"
-  isFlagged      Boolean           @default(false)
-  createdAt      DateTime          @default(now())
-}
-
-model ReturnRequest {
-  id            String   @id @default(cuid())
-  orderId       String   @unique
-  userId        String
-  order         Order    @relation(fields: [orderId], references: [id])
-  vendorId      String
-  reason        String
-  description   String
-  imageProof    String?
-  status        String   @default("REQUESTED") // "REQUESTED", "UNDER_REVIEW", "APPROVED", "REJECTED"
-  adminDecision String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now()) @updatedAt
-  user          User     @relation(fields: [userId], references: [id])
-}
-
-model VendorWallet {
-  id             String  @id @default(cuid())
-  vendorId       String  @unique
-  vendor         Vendor  @relation(fields: [vendorId], references: [id])
-  pendingBalance Decimal @default(0.00) @db.Decimal(12, 2)
-
-  availableBalance Decimal @default(0.00) @db.Decimal(12, 2)
-
-  totalEarnings Decimal  @default(0.00) @db.Decimal(12, 2)
-  bankName      String?
-  accountNumber String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Ticket {
-  id String @id @default(cuid())
-
-  userId  String
-  subject String
-  message String @db.Text
-
-  status TicketStatus @default(OPEN)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  user      User     @relation(fields: [userId], references: [id])
-}
-
 enum TicketStatus {
   OPEN
   IN_PROGRESS
   RESOLVED
   CLOSED
-}
-
-model FAQ {
-  id       String @id @default(cuid())
-  question String
-  answer   String
-  category String // e.g., "ORDERS", "PAYMENT", "ACCOUNT"
-}
-
-model AuditLog {
-  id String @id @default(cuid())
-
-  adminId String
-  admin   User   @relation(fields: [adminId], references: [id])
-
-  action     AuditAction
-  targetId   String?
-  targetType String? // USER | VENDOR | PRODUCT | ORDER
-
-  details   String? @db.Text
-  ipAddress String?
-
-  createdAt DateTime @default(now())
-
-  @@index([adminId])
-  @@index([targetId])
-  @@index([createdAt])
 }
 
 enum AuditAction {
@@ -830,73 +1046,12 @@ enum AuditAction {
   APPROVE_PRODUCT
   REJECT_PRODUCT
   APPROVE_PAYOUT
-  REJECT_PAYOUT
   FORCE_REFUND
   CREATE_COUPON
   UPDATE_COUPON
   UPDATE_ORDER
   UPDATE_SETTING
-}
-
-model Campaign {
-  id           String                @id @default(cuid())
-  title        String
-  description  String
-  discount     Decimal               @db.Decimal(5, 2)
-  bannerUrl    String?
-  startDate    DateTime
-  endDate      DateTime
-  isActive     Boolean               @default(true)
-  participants CampaignParticipant[]
-  products     CampaignProduct[] // Added: Link to actual items
-  createdAt    DateTime              @default(now())
-}
-
-model CampaignParticipant {
-  id         String   @id @default(cuid())
-  campaignId String
-  vendorId   String
-  campaign   Campaign @relation(fields: [campaignId], references: [id])
-  vendor     Vendor   @relation(fields: [vendorId], references: [id])
-  joinedAt   DateTime @default(now())
-
-  @@unique([campaignId, vendorId])
-}
-
-// NEW: This model tracks exactly which items are discounted
-model CampaignProduct {
-  id         String   @id @default(cuid())
-  campaignId String
-  productId  String
-  vendorId   String
-  campaign   Campaign @relation(fields: [campaignId], references: [id])
-  product    Product  @relation(fields: [productId], references: [id])
-  vendor     Vendor   @relation(fields: [vendorId], references: [id])
-
-  @@unique([campaignId, productId]) // One product can't have two discounts in one campaign
-}
-
-model FraudLog {
-  id String @id @default(cuid())
-
-  userId   String?
-  vendorId String?
-  orderId  String?
-
-  severity FraudSeverity
-  type     FraudType
-
-  description String
-
-  isResolved Boolean @default(false)
-
-  resolvedBy String?
-  resolvedAt DateTime?
-
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([vendorId])
+  REJECT_PAYOUT
 }
 
 enum FraudSeverity {
@@ -914,31 +1069,6 @@ enum FraudType {
   CHARGEBACK_RISK
 }
 
-model Dispute {
-  id String @id @default(cuid())
-
-  orderId String @unique
-  order   Order  @relation(fields: [orderId], references: [id])
-
-  customerId String
-  vendorId   String
-
-  reason String @db.Text
-
-  status DisputeStatus @default(OPEN)
-
-  refundAmount Decimal? @db.Decimal(10, 2)
-
-  resolution String? @db.Text
-  adminId    String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  evidences DisputeEvidence[]
-  messages  DisputeMessage[]
-}
-
 enum DisputeStatus {
   OPEN
   SELLER_RESPONDED
@@ -950,46 +1080,9 @@ enum DisputeStatus {
   CLOSED
 }
 
-model DisputeEvidence {
-  id         String   @id @default(cuid())
-  disputeId  String
-  url        String
-  uploadedBy String // CUSTOMER | VENDOR
-  createdAt  DateTime @default(now())
-
-  dispute Dispute @relation(fields: [disputeId], references: [id])
-}
-
-model DisputeMessage {
-  id        String   @id @default(cuid())
-  disputeId String
-  senderId  String
-  message   String   @db.Text
-  createdAt DateTime @default(now())
-
-  dispute Dispute @relation(fields: [disputeId], references: [id])
-}
-
-model SystemSetting {
-  id          String   @id @default(cuid())
-  key         String   @unique // e.g., "MARKETPLACE_COMMISSION"
-  value       String // stored as string, parsed in service
-  description String?
-  updatedAt   DateTime @updatedAt
-}
-
-// ==========================================
-//   AVIORÈ GROWTH MARKETING MODULES (NEW)
-// ==========================================
-
 enum MarketerRole {
   HEAD
   SUB_MARKETER
-}
-
-enum CommissionType {
-  ORGANIC
-  REFERRAL
 }
 
 enum MarketerStatus {
@@ -1009,119 +1102,4 @@ enum GrowthPayoutStatus {
   PROCESSING
   SETTLED
   REJECTED
-}
-
-model Marketer {
-  id           String         @id @default(uuid())
-  name         String
-  teamCode     String // e.g., "TEAM_IO" -> Groups clusters together
-  trackingTag  String         @unique // 🎯 NEW: e.g., "TEAM_IO01", "TEAM_IO02". Unique for links!
-  passcodeHash String // Secure bcrypt/argon2 hash of the 6-digit passcode
-  role         MarketerRole   @default(SUB_MARKETER)
-  status       MarketerStatus @default(ACTIVE)
-
-  // Banking parameters appended for the Settlement Node 
-  bankName      String? @default("Access Bank Plc")
-  accountNumber String? @db.VarChar(10)
-  accountName   String? // Verified settlement terminal beneficiary name
-
-  // Relations
-  wallet         MarketingWallet?
-  settings       MarketerSettings?
-  vendors        Vendor[]              @relation("MarketerToVendor")
-  payouts        GrowthPayoutRequest[]
-  commissionLogs GrowthCommissionLog[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([teamCode, passcodeHash])
-  @@index([teamCode])
-  @@index([trackingTag]) // 🎯 Indexed for lightning-fast referral signups
-}
-
-model MarketerSettings {
-  id         String   @id @default(uuid())
-  marketerId String   @unique
-  marketer   Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
-
-  // Socket and transmission notification hooks
-  onVendorSignup  Boolean @default(true)
-  onSaleDelivered Boolean @default(true)
-  onPayoutSettled Boolean @default(true)
-  weeklyDigest    Boolean @default(false)
-
-  // Micro strategy allocation metrics (Privileged cluster control)
-  globalAllocationSplit Int @default(20)
-  voucherSignLimit      Int @default(5)
-
-  updatedAt DateTime @updatedAt
-}
-
-model MarketingWallet {
-  id         String  @id @default(uuid())
-  marketerId String  @unique
-  balance    Decimal @default(0.00) @db.Decimal(12, 2) // 🎯 Converted to secure Decimal
-
-  bankName      String?
-  accountNumber String?
-  accountName   String?
-
-  marketer  Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
-  updatedAt DateTime @updatedAt
-}
-
-model GrowthCommissionLog {
-  id          String    @id @default(uuid())
-  orderId     String
-  orderItemId String
-  orderItem   OrderItem @relation(fields: [orderItemId], references: [id])
-  vendorId    String
-  marketerId  String?
-
-  retailAmount         Decimal @db.Decimal(12, 2)
-  vendorCouponDiscount Decimal @db.Decimal(12, 2)
-  referralDiscount     Decimal @db.Decimal(12, 2)
-  customerPaid         Decimal @db.Decimal(12, 2)
-  vendorPayout         Decimal @db.Decimal(12, 2)
-
-  platformGrossCommission Decimal @db.Decimal(12, 2)
-  platformNetCommission   Decimal @db.Decimal(12, 2)
-  marketerCommission      Decimal @db.Decimal(12, 2)
-  avioreCommission        Decimal @db.Decimal(12, 2)
-
-  commissionType CommissionType @default(ORGANIC) // Type-safe Enum configuration
-
-  // 🛡️ Gateway Tracking Vectors for disputes
-  paymentGatewayReference  String?
-  flutterwaveTransactionId String?
-
-  createdAt DateTime @default(now())
-
-  order    Order     @relation(fields: [orderId], references: [id])
-  vendor   Vendor    @relation(fields: [vendorId], references: [id])
-  marketer Marketer? @relation(fields: [marketerId], references: [id])
-
-  @@index([orderId])
-  @@index([orderItemId])
-  @@index([vendorId])
-  @@index([marketerId])
-}
-
-model GrowthPayoutRequest {
-  id              String             @id @default(uuid())
-  marketerId      String
-  amount          Decimal            @db.Decimal(12, 2) // 🎯 Converted to secure Decimal
-  status          GrowthPayoutStatus @default(PENDING)
-  referenceString String             @unique
-
-  bankName      String
-  accountNumber String
-  accountName   String
-
-  marketer  Marketer @relation(fields: [marketerId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([marketerId])
 }
