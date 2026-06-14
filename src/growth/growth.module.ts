@@ -70,6 +70,7 @@ import { PromotionAnalyticsService } from '../coupons/analytics.service';
     GrowthSettingsService,
     GrowthLeaderboardService,
     GrowthAnalyticsService,
+    GrowthCommissionLedgerService,
     
     // Shared Utility Dependencies
     PrismaService,
@@ -97,6 +98,7 @@ import { PromotionAnalyticsService } from '../coupons/analytics.service';
     PromotionService,
     CampaignService,
     PromotionAnalyticsService,
+    GrowthCommissionLedgerService,
   ],
 })
 export class GrowthModule {}
