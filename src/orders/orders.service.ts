@@ -68,9 +68,7 @@ items: {
     product: {
       connect: { id: i.productId }
     },
-    vendor: {
-      connect: { id: i.vendorId }
-    }
+    vendorId: i.vendorId
   })),
 },
         },
