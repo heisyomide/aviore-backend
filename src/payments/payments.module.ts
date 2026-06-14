@@ -17,6 +17,7 @@ import { SettlementQueue } from './queues/settlement.queue';
 
 import { SettlementProcessor } from './workers/settlement.processor';
 import { DeadLetterProcessor } from './workers/dead-letter.processor';
+import { PaymentsService } from './payments.service';
 
 @Module({
 imports: [
@@ -46,6 +47,7 @@ ReconciliationService,
 SettlementQueue,
 SettlementProcessor,
 DeadLetterProcessor,
+PaymentsService,
 
 ],
 
@@ -53,6 +55,7 @@ exports: [
 PaymentInitializerService,
 PaymentWebhookService,
 SettlementService,
+
 ],
 })
 export class PaymentsModule {}
