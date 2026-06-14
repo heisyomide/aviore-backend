@@ -9,14 +9,12 @@ import { PaymentsWebhookController } from './controllers/payment-webhook.control
 // Services
 import { PaymentInitializerService } from './services/payment-initializer.service';
 import { PaymentWebhookService } from './services/payment-webhook.service';
-import { SettlementService } from './services/settlement.service';
 import { AuditService } from './services/audit.service';
 import { ReconciliationService } from './services/reconciliation.service';
 import { PaymentsService } from './payments.service';
 
 // Queues & Workers
 import { SettlementQueue } from './queues/settlement.queue';
-import { SettlementProcessor } from './workers/settlement.processor';
 import { DeadLetterProcessor } from './workers/dead-letter.processor';
 
 // External Domain Modules
@@ -45,10 +43,8 @@ import { GrowthModule } from '../growth/growth.module'; // ◄ 🟥 Imported cle
     AuditService,
     PaymentInitializerService,
     PaymentWebhookService,
-    SettlementService,
     ReconciliationService,
     SettlementQueue,
-    SettlementProcessor,
     DeadLetterProcessor,
     PaymentsService,
   ],
@@ -56,7 +52,6 @@ import { GrowthModule } from '../growth/growth.module'; // ◄ 🟥 Imported cle
   exports: [
     PaymentInitializerService,
     PaymentWebhookService,
-    SettlementService,
     PaymentsService,
   ],
 })

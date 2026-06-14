@@ -1245,7 +1245,7 @@ async approveWithdrawal(
     status: 'PENDING',
   },
   data: {
-    status: 'COMPLETED',
+    status: 'PROCESSING',
   },
 });
 
