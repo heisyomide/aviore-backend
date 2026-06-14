@@ -1,7 +1,7 @@
 import { Module, Global, NestModule, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq'; // ✅ Upgraded to matching BullMQ package
 import { CacheModule } from '@nestjs/cache-manager';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { redisStore } from 'cache-manager-redis-yet';
@@ -61,28 +61,30 @@ import { GrowthModule } from './growth/growth.module';
     }),
 
     // 🛡️ 2. SECURITY: RATE LIMITING
-    // Using local memory fallback cleanly avoids exhausting separate third-party tiers
     ThrottlerModule.forRoot([{
       ttl: 60000,
       limit: 100, 
     }]),
     
-    // 🐂 3. BULL QUEUE (Render Key-Value Optimized Refactor)
+    // 🐂 3. BULLMQ GLOBAL CONFIGURATION (Render Key-Value Mesh Target)
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const redisUrl = config.get<string>('REDIS_URL') || '';
         
+        // Parse the internal redis connection string to configure BullMQ connection object
+        const parsedUrl = new URL(redisUrl);
+        
         return {
-          redis: {
-            // Natively pass the entire internal connection string securely
-            url: redisUrl,
+          connection: {
+            host: parsedUrl.hostname,
+            port: parseInt(parsedUrl.port, 10) || 6379,
+            username: parsedUrl.username || undefined,
+            password: parsedUrl.password ? decodeURIComponent(parsedUrl.password) : undefined,
             maxRetriesPerRequest: null,
-            enableReadyCheck: false,
-            // Render Internal Key-Value connections use redis:// over a private network, 
-            // meaning custom TLS handshake rejections are not required.
+            // Render Key-Value uses an unencrypted redis:// protocol over a private network mesh.
+            // TLS optimization rules are skipped unless switching back to an external rediss:// string.
             tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
-            retryStrategy: (times) => Math.min(times * 100, 3000),
           },
           defaultJobOptions: {
             attempts: 3,
