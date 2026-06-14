@@ -57,6 +57,7 @@ import { GrowthModule } from '../growth/growth.module'; // ◄ 🟥 Imported cle
     PaymentInitializerService,
     PaymentWebhookService,
     SettlementService,
+    PaymentsService,
   ],
 })
 export class PaymentsModule {}
