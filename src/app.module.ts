@@ -61,49 +61,27 @@ import { GrowthModule } from './growth/growth.module';
     }),
 
     // 🛡️ 2. SECURITY: RATE LIMITING
+    // Using local memory fallback cleanly avoids exhausting separate third-party tiers
     ThrottlerModule.forRoot([{
       ttl: 60000,
       limit: 100, 
     }]),
     
-    // 🐂 3. BULL QUEUE (Hardened Production Refactor)
+    // 🐂 3. BULL QUEUE (Render Key-Value Optimized Refactor)
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const redisUrl = config.get<string>('REDIS_URL') || '';
-        const isProd = config.get<string>('NODE_ENV') === 'production';
         
-        let redisConfigOptions: any = {};
-
-        try {
-          if (redisUrl.startsWith('redis://') || redisUrl.startsWith('rediss://')) {
-            // Parse URL safely into individual connection tokens to prevent connection parsing failure drops
-            const parsedUrl = new URL(redisUrl);
-            redisConfigOptions = {
-              host: parsedUrl.hostname,
-              port: parseInt(parsedUrl.port, 10) || (redisUrl.startsWith('rediss://') ? 6380 : 6379),
-              username: parsedUrl.username || undefined,
-              password: parsedUrl.password ? decodeURIComponent(parsedUrl.password) : undefined,
-            };
-          } else {
-            redisConfigOptions = { url: redisUrl };
-          }
-        } catch (e) {
-          // Absolute fallback if structural URL object compilation catches a local string error
-          redisConfigOptions = { url: redisUrl };
-        }
-
         return {
           redis: {
-            ...redisConfigOptions,
+            // Natively pass the entire internal connection string securely
+            url: redisUrl,
             maxRetriesPerRequest: null,
             enableReadyCheck: false,
-            
-            // 🛡️ THE RENDER PRODUCTION FIX: Hardened validation matching target infrastructure
-            tls: redisUrl.startsWith('rediss://') || isProd
-              ? { rejectUnauthorized: false } 
-              : undefined,
-              
+            // Render Internal Key-Value connections use redis:// over a private network, 
+            // meaning custom TLS handshake rejections are not required.
+            tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
             retryStrategy: (times) => Math.min(times * 100, 3000),
           },
           defaultJobOptions: {
@@ -116,18 +94,20 @@ import { GrowthModule } from './growth/growth.module';
       },
     }),
 
-    // ⚡ 4. CACHE MANAGER (Stability Refactor)
+    // ⚡ 4. CACHE MANAGER (Render Internal Network Optimization)
     CacheModule.registerAsync({
       isGlobal: true,
       inject: [ConfigService],
       useFactory: async (config: ConfigService) => {
+        const redisUrl = config.get<string>('REDIS_URL') || '';
+
         const store = await redisStore({
-          url: config.get<string>('REDIS_URL'),
-          ttl: 600000,
+          url: redisUrl,
+          ttl: 600000, // 10 Minutes cache mapping lifespan
           socket: {
             connectTimeout: 30000, 
             keepAlive: 5000,
-            tls: config.get<string>('REDIS_URL')?.startsWith('rediss://'),
+            tls: redisUrl.startsWith('rediss://'),
             reconnectStrategy: (retries) => {
               if (retries > 20) return new Error('REDIS_TERMINAL_FAILURE');
               return Math.min(retries * 200, 5000);
@@ -142,7 +122,7 @@ import { GrowthModule } from './growth/growth.module';
         );
 
         client.on('ready', () =>
-          console.log('🟢 Redis Node Synchronized'),
+          console.log('🟢 AVIORÈ_CACHE: Redis Node Synchronized over Render Internal Mesh.'),
         );
 
         return { store: store as any };

@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { PaymentsService } from '../payments/payments.service';
+import { PaymentInitializerService } from '../payments/services/payment-initializer.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PricingService, CartItemInput } from './pricing.service';
 import { InventoryService } from './inventory.service';
@@ -11,7 +11,7 @@ export class OrdersService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly paymentsService: PaymentsService,
+    private readonly PaymentInitializerService: PaymentInitializerService,
     private readonly pricingService: PricingService,
     private readonly inventoryService: InventoryService
   ) {}
@@ -90,7 +90,7 @@ items: {
 
     // 3. Initialize third-party payment links outside the transaction to prevent connection pooling deadlocks
     try {
-      const payment = await this.paymentsService.initializePayment(
+      const payment = await this.PaymentInitializerService.initialize(
         order.id,
         user.email,
         user.firstName || 'Customer'
