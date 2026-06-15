@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { Role } from '@prisma/client';
+import { NotificationService } from 'src/notification/notification.service';
 
 type WelcomeEmailPayload = {
   name: string;
@@ -22,6 +23,8 @@ type OrderNotificationPayload = {
 @Injectable()
 export class MailService {
   constructor(
+    @Inject(forwardRef(() => NotificationService)) // ◄ Inject lazily
+    private notificationService: NotificationService,
     @InjectQueue('mail-queue')
     private readonly mailQueue: Queue,
   ) {}

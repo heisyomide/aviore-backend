@@ -1,12 +1,12 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bull';
 import { MailService } from './mail.service';
 import { MailProcessor } from './mail.processor';
 import { MailDebugController } from './mail-debug.controller'; 
-import { NotificationModule } from 'src/notification/notification.module';
+import { NotificationModule } from '../notification/notification.module';
 @Module({
   imports: [
-    NotificationModule,
+    forwardRef(() => NotificationModule),
     // Register the 'mail-queue'
     BullModule.registerQueue({
       name: 'mail-queue',

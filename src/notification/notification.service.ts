@@ -1,4 +1,6 @@
 import {
+    forwardRef,
+  Inject,
   Injectable,
   Logger,
 } from '@nestjs/common';
@@ -44,6 +46,7 @@ system: null,
 } as const;
 
 constructor(
+    @Inject(forwardRef(() => MailService)) // ◄ Inject lazily
 private readonly prisma: PrismaService,
 private readonly mailService: MailService,
 ) {}
