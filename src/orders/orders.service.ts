@@ -20,123 +20,123 @@ export class OrdersService {
   /**
    * Execution routine to process order requests, deduct inventory, and map financial data.
    */
-  async create(createOrderDto: CreateOrderDto, userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, firstName: true },
-    });
-    if (!user) throw new NotFoundException('USER_NOT_FOUND');
+async create(createOrderDto: CreateOrderDto, userId: string) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, firstName: true },
+  });
+  if (!user) throw new NotFoundException('USER_NOT_FOUND');
 
-    const inputItems: CartItemInput[] = createOrderDto.items.map((i) => ({
-      productId: i.productId,
-      quantity: i.quantity,
-    }));
-
-    // 1. Calculate order total dynamically to handle any pricing shifts
-    let evaluation: ReturnType<typeof this.pricingService.calculateCheckoutTotal> extends Promise<infer R> ? R : any;
-    try {
-      evaluation = await this.pricingService.calculateCheckoutTotal(inputItems);
-    } catch (err: any) {
-      throw new BadRequestException(err.message || 'PRICING_EVALUATION_FAILED');
-    }
-
-    // 2. Execute database operations inside an atomic transaction block
-    const order = await this.prisma.$transaction(async (tx) => {
-      // Structural inventory guardrails to protect against checkout race conditions
-      await this.inventoryService.verifyStockAvailability(tx, inputItems);
-      await this.inventoryService.deductInventory(tx, inputItems);
-
-      await this.notificationService.send({
-  userId,
-  userEmail: user.email,
-  title: 'Order Created',
-  message: `Your order #${order.id.slice(-8).toUpperCase()} has been created successfully and is awaiting payment.`,
-  category: 'orderUpdates',
-});
-
-      const newOrder = await tx.order.create({
-        data: {
-          userId,
-          addressId: createOrderDto.addressId,
-          vendorId: evaluation.vendorId,
-          status: 'PENDING',
-          totalAmount: evaluation.grandTotal,
-
-          campaignLogs: {
-            create: evaluation.appliedCampaigns.map((c) => ({
-              title: c.title,
-              discountAmount: c.amount,
-            })),
-          },
-
-items: {
-  create: evaluation.items.map((i) => ({
+  const inputItems: CartItemInput[] = createOrderDto.items.map((i) => ({
+    productId: i.productId,
     quantity: i.quantity,
-    priceAtPurchase: i.finalPrice,
-    // 🛡️ Explicitly connect the item relations using Prisma's strict input format
-    product: {
-      connect: { id: i.productId }
-    },
-    vendorId: i.vendorId
-  })),
-},
-        },
-        include: {
-          items: true,
-          campaignLogs: true,
-        },
-      });
+  }));
 
-      // Clear the user's active cart upon successful order registration
-      await tx.cartItem.deleteMany({
-        where: { cart: { userId } },
-      });
+  // 1. Calculate order total dynamically to handle any pricing shifts
+  let evaluation: ReturnType<typeof this.pricingService.calculateCheckoutTotal> extends Promise<infer R> ? R : any;
+  try {
+    evaluation = await this.pricingService.calculateCheckoutTotal(inputItems);
+  } catch (err: any) {
+    throw new BadRequestException(err.message || 'PRICING_EVALUATION_FAILED');
+  }
 
-      return newOrder;
+  // 2. Execute database operations inside an atomic transaction block
+  const order = await this.prisma.$transaction(async (tx) => {
+    // Structural inventory guardrails to protect against checkout race conditions
+    await this.inventoryService.verifyStockAvailability(tx, inputItems);
+    await this.inventoryService.deductInventory(tx, inputItems);
+
+    const newOrder = await tx.order.create({
+      data: {
+        userId,
+        addressId: createOrderDto.addressId,
+        vendorId: evaluation.vendorId,
+        status: 'PENDING',
+        totalAmount: evaluation.grandTotal,
+
+        campaignLogs: {
+          create: evaluation.appliedCampaigns.map((c) => ({
+            title: c.title,
+            discountAmount: c.amount,
+          })),
+        },
+
+        items: {
+          create: evaluation.items.map((i) => ({
+            quantity: i.quantity,
+            priceAtPurchase: i.finalPrice,
+            product: {
+              connect: { id: i.productId }
+            },
+            vendorId: i.vendorId
+          })),
+        },
+      },
+      include: {
+        items: true,
+        campaignLogs: true,
+      },
     });
 
-    // 3. Initialize third-party payment links outside the transaction to prevent connection pooling deadlocks
-    try {
-      const payment = await this.PaymentInitializerService.initialize(
-        order.id,
-        user.email,
-        user.firstName || 'Customer'
-      );
+    // Clear the user's active cart upon successful order registration
+    await tx.cartItem.deleteMany({
+      where: { cart: { userId } },
+    });
 
-      await this.notificationService.send({
-  userId,
-  userEmail: user.email,
-  title: 'Payment Link Ready',
-  message:
-    'Your payment session has been created. Complete payment to begin order processing.',
-  category: 'orderUpdates',
-});
+    return newOrder;
+  });
 
-      return {
-        success: true,
-        message: 'TRANSACTION_AUTHORIZED',
-        data: {
-          orderId: order.id,
-          paymentLink: payment.link,
-          valuation: order.totalAmount,
-        },
-      };
-    } catch (err: any) {
-      this.logger.error(`PAYMENT_LINK_GEN_FAILED: ${err?.message || err}`);
-      return {
-        success: false,
-        message: 'PAYMENT_GATEWAY_UNREACHABLE',
-        data: {
-          orderId: order.id,
-          paymentLink: null,
-        },
-      };
-
-      
-    }
-
-
+  // 3. Post-Transaction Notification Dispatches (Safe from transactional deadlocks)
+  try {
+    await this.notificationService.send({
+      userId,
+      userEmail: user.email,
+      title: 'Order Created',
+      message: `Your order #${order.id.slice(-8).toUpperCase()} has been created successfully and is awaiting payment.`,
+      category: 'orderUpdates',
+    });
+  } catch (notifyErr) {
+    // Prevent a notification system glitch from breaking the user's checkout flow
+    this.logger.error(`ORDER_CREATION_NOTICE_FAILED: ${notifyErr}`);
   }
+
+  // 4. Initialize third-party payment links outside the transaction
+  try {
+    const payment = await this.PaymentInitializerService.initialize(
+      order.id,
+      user.email,
+      user.firstName || 'Customer'
+    );
+
+    await this.notificationService.send({
+      userId,
+      userEmail: user.email,
+      title: 'Payment Link Ready',
+      message: 'Your payment session has been created. Complete payment to begin order processing.',
+      category: 'orderUpdates',
+    });
+
+    return {
+      success: true,
+      message: 'TRANSACTION_AUTHORIZED',
+      data: {
+        orderId: order.id,
+        paymentLink: payment.link,
+        valuation: order.totalAmount,
+      },
+    };
+  } catch (err: any) {
+    this.logger.error(`PAYMENT_LINK_GEN_FAILED: ${err?.message || err}`);
+    return {
+      success: false,
+      message: 'PAYMENT_GATEWAY_UNREACHABLE',
+      data: {
+        orderId: order.id,
+        paymentLink: null,
+      },
+    };
+  }
+}
 
   /**
    * API Port hook allowing the frontend UI to call calculations directly.
