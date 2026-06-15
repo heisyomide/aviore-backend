@@ -948,50 +948,55 @@ async updateOrderStatus(
   vendorId: string, 
   dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
 ) {
+  let order;
+
   try {
-const order = await this.prisma.order.update({
-  where: {
-    id: orderId,
-    vendorId,
-  },
-  data: {
-    status: dto.status,
-    ...(dto.trackingNumber && {
-      trackingNumber: dto.trackingNumber,
-    }),
-    ...(dto.carrier && {
-      carrier: dto.carrier,
-    }),
-  },
-  include: {
-    user: true,
-  },
-});
-
-    await this.notificationService.send({
-  userId: order.userId,
-  userEmail: order.user.email,
-  title: 'Order Updated',
-  message: `Your order is now ${status}.`,
-  category: 'orderUpdates',
-});
-
-return order;
-
+    order = await this.prisma.order.update({
+      where: {
+        id: orderId,
+        vendorId, // Enforces strict tenant ownership isolation
+      },
+      data: {
+        status: dto.status,
+        ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
+        ...(dto.carrier && { carrier: dto.carrier }),
+      },
+      include: {
+        user: true,
+      },
+    });
   } catch (error: unknown) {
-  if (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === 'P2025'
-  ) {
-    throw new ForbiddenException(
-      'Order not found or access denied'
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2025'
+    ) {
+      throw new ForbiddenException(
+        'Order not found or access denied'
+      );
+    }
+    
+    // Log the true structural error if something else breaks in the DB layer
+    this.logger.error(`DB_ORDER_STATUS_UPDATE_FAILED: ${(error as Error).message}`);
+    throw new InternalServerErrorException(
+      'Could not update order status'
     );
   }
 
-  throw new InternalServerErrorException(
-    'Could not update order status'
-  );
-}
+  // Dispatch notice safely outside the core write execution block
+  try {
+    await this.notificationService.send({
+      userId: order.userId,
+      userEmail: order.user.email,
+      title: 'Order Updated',
+      message: `Your order status has been updated to ${dto.status}.`, // 🛠️ Fixed reference
+      category: 'orderUpdates',
+    });
+  } catch (notifyError) {
+    // Log notification faults without killing an otherwise successful state change
+    this.logger.error(`NOTIFICATION_DISPATCH_FAILED_ON_STATUS_CHANGE: ${(notifyError as Error).message}`);
+  }
+
+  return order;
 }
 
 async getCustomerDetails(vendorId: string, userId: string) {
