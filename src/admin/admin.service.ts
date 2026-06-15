@@ -840,7 +840,6 @@ async executeBroadcast(dto: {
       userId: user.id,
       title: dto.title,
       message: dto.message,
-      category: 'promotions', 
       type: 'BROADCAST', // ✅ FIXED: Added the mandatory required schema field
       isRead: false,
     }));
