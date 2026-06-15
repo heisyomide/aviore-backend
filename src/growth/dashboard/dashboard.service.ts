@@ -1,11 +1,9 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { OrderStatus } from '@prisma/client';
 
 @Injectable()
 export class GrowthDashboardService {
-  private readonly logger = new Logger(GrowthDashboardService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
   async getOverviewStats(marketerId: string) {
@@ -22,8 +20,7 @@ export class GrowthDashboardService {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // 2. Fetch ALL marketers operating inside the shared team cluster scope safely
-    // This catches both head marketers and sub-marketers under the same team code
+    // 2. Fetch all marketers operating inside the shared team cluster scope safely
     const clusterMarketersWithVendors = await this.prisma.marketer.findMany({
       where: { teamCode: marketer.teamCode },
       include: {
@@ -35,18 +32,13 @@ export class GrowthDashboardService {
       }
     });
 
-    // Extract all vendors linked across this entire cluster pool
+    // Extract, combine, and sort all vendors linked to this cluster pool
     const teamVendors = clusterMarketersWithVendors.flatMap(m => m.vendors || []);
-    
-    // De-duplicate vendor list by ID to avoid tracking duplication anomalies
-    const uniqueTeamVendors = Array.from(new Map(teamVendors.map(v => [v.id, v])).values());
-    
-    // Sort vendors descending by creation date
-    uniqueTeamVendors.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    teamVendors.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    const totalVendorsReferred = uniqueTeamVendors.length;
-    const activeVendorsCount = uniqueTeamVendors.filter(v => (v._count?.products || 0) >= 5).length;
-    const teamVendorIds = uniqueTeamVendors.map(v => v.id);
+    const totalVendorsReferred = teamVendors.length;
+    const activeVendorsCount = teamVendors.filter(v => (v._count?.products || 0) >= 5).length;
+    const teamVendorIds = teamVendors.map(v => v.id);
 
     // Initial state definitions for data metrics
     let globalSalesCount = 0;
@@ -55,35 +47,52 @@ export class GrowthDashboardService {
     let recentTransactionsLogs: any[] = [];
     let vendorSalesMap = new Map<string, number>();
 
-    // 3. Query database tables securely with explicit cross-relation checks
+    // 3. Sequentially query the database tables to prevent connection pool exhaustion
     try {
       if (teamVendorIds.length > 0) {
-        // A. Aggregate global delivered item counts across all cluster vendors
+        // A. Aggregate global delivered counts across the cluster
         globalSalesCount = await this.prisma.orderItem.count({
           where: {
-            vendorId: { in: teamVendorIds }, // 🛡️ Filter using direct order-item ownership
-            order: { status: OrderStatus.DELIVERED }
+            product: { vendorId: { in: teamVendorIds } },
+            order: { status: OrderStatus.COMPLETED }
           }
         });
 
-        // B. Accumulate total sales counts mapped per individual vendor ID
-        const salesGroupedByVendor = await this.prisma.orderItem.groupBy({
-          by: ['vendorId'],
-          where: {
-            vendorId: { in: teamVendorIds },
-            order: { status: OrderStatus.DELIVERED }
-          },
-          _count: { id: true }
+        // B. Fetch products linked to these vendors first to map productIds to vendorIds
+        const clusterProducts = await this.prisma.product.findMany({
+          where: { vendorId: { in: teamVendorIds } },
+          select: { id: true, vendorId: true }
         });
 
-        salesGroupedByVendor.forEach((group) => {
-          if (group.vendorId) {
-            vendorSalesMap.set(group.vendorId, group._count.id);
-          }
-        });
+        // Map productId -> vendorId for rapid lookup in memory
+        const productToVendorMap = new Map<string, string>(
+          clusterProducts.map(p => [p.id, p.vendorId])
+        );
+        const clusterProductIds = clusterProducts.map(p => p.id);
+
+        if (clusterProductIds.length > 0) {
+          // C. GroupBy using the exact structural scalar field: productId ⚡
+          const salesGrouped = await this.prisma.orderItem.groupBy({
+            by: ['productId'],
+            where: {
+              productId: { in: clusterProductIds },
+              order: { status: OrderStatus.DELIVERED }
+            },
+            _count: { id: true }
+          });
+
+          // Map grouped results cleanly to their corresponding vendor IDs using our memory map
+          salesGrouped.forEach((group: any) => {
+            const vendorId = productToVendorMap.get(group.productId);
+            if (vendorId) {
+              const existingCount = vendorSalesMap.get(vendorId) || 0;
+              vendorSalesMap.set(vendorId, existingCount + (group._count?.id || 0));
+            }
+          });
+        }
       }
 
-      // C. Aggregate commission earnings for the target marketer for the current month
+      // D. Aggregate commission earnings for the current month
       const monthlyEarningsAggregate = await this.prisma.growthCommissionLog.aggregate({
         where: {
           marketerId: marketer.id,
@@ -98,7 +107,7 @@ export class GrowthDashboardService {
         : 0;
       totalMonthSalesCount = monthlyEarningsAggregate?._count?.id || 0;
 
-      // D. Fetch recent pipeline transaction logs linked to cluster activity
+      // E. Fetch recent pipeline transaction logs
       recentTransactionsLogs = await this.prisma.growthCommissionLog.findMany({
         where: { marketerId: marketer.id },
         take: 5,
@@ -106,11 +115,11 @@ export class GrowthDashboardService {
       });
 
     } catch (dbError) {
-      this.logger.error('⚠️ [DASHBOARD DB AGGREGATION ERROR]:', dbError);
+      console.error('⚠️ [DASHBOARD DB AGGREGATION ERROR]:', dbError);
     }
 
     // 4. Map transactions onto the structural architecture expected by your UI
-    const vendorMap = new Map(uniqueTeamVendors.map(v => [v.id, v.storeName]));
+    const vendorMap = new Map(teamVendors.map(v => [v.id, v.storeName]));
     const recentTransactions = recentTransactionsLogs.map((log: any, idx) => {
       const associatedStoreName = vendorMap.get(log.vendorId) || 'AVI_VND_STORE';
       const rawCommission = log.marketerCommission ? Number(log.marketerCommission) : 0;
@@ -124,7 +133,7 @@ export class GrowthDashboardService {
     });
 
     // 5. Construct the vendor list cleanly using the pre-calculated memory map
-    const vendorOverviewList = uniqueTeamVendors.slice(0, 5).map((v) => {
+    const vendorOverviewList = teamVendors.slice(0, 5).map((v) => {
       let computedStatus = 'Pending';
       const productCount = v._count?.products || 0;
       if (productCount >= 5) computedStatus = 'Active';
@@ -160,7 +169,7 @@ export class GrowthDashboardService {
       },
       walletSummary: {
         balance: `₦${activeWalletBalance.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`,
-        nextPayoutWindow: '19 Jun 2026'
+        nextPayoutWindow: '12 Jun 2026'
       },
       statsGrid: [
         { title: 'Total Vendors Referred', value: totalVendorsReferred.toString(), subtext: 'Team Volume' },
