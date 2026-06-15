@@ -482,7 +482,7 @@ model OrderItem {
   productId             String
   commission            Float?
   vendorEarning         Float?
-  payoutStatus          String?         @default("PENDING")
+  payoutStatus          String?         @default("LOCKED")
   createdAt             DateTime        @default(now())
   variantId             String?
   retailAmount          Decimal?        @db.Decimal(12, 2)
