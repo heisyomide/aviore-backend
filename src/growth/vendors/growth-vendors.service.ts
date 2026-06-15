@@ -83,7 +83,7 @@ export class GrowthVendorsService {
           select: { products: true }
         },
         orders: {
-          where: { status: OrderStatus.DELIVERED }, 
+          where: { status: OrderStatus.COMPLETED }, 
           select: { totalAmount: true }
         }
       } satisfies Prisma.VendorSelect;
