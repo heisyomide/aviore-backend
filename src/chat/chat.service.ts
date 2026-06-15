@@ -89,13 +89,23 @@ export class ChatService {
           select: { email: true, firstName: true }
         });
 
+        // ✅ FIXED: Using true '.vendor' relational selector mapping instead of 'vendorProfile'
         const sender = await this.prisma.user.findUnique({
           where: { id: data.userId },
-          select: { firstName: true } // ✅ FIXED: Removed non-existent username selection
+          select: { 
+            firstName: true,
+            vendor: {
+              select: {
+                storeName: true 
+              }
+            }
+          }
         });
 
         if (recipient) {
-          const senderName = sender?.firstName || 'A customer';
+          // ✅ FIXED: Safely parsing storeName through the correct relation object matching the schema
+          const senderName = (sender as any)?.vendor?.storeName || sender?.firstName || 'A customer';
+          
           await this.notificationService.send({
             userId: recipientUserId,
             userEmail: recipient.email,
@@ -149,13 +159,23 @@ export class ChatService {
           select: { email: true }
         });
 
+        // ✅ FIXED: Selecting both firstName and relational vendor storeName fields
         const sender = await this.prisma.user.findUnique({
           where: { id: data.senderId },
-          select: { firstName: true }
+          select: { 
+            firstName: true,
+            vendor: {
+              select: {
+                storeName: true
+              }
+            }
+          }
         });
 
         if (recipient) {
-          const senderName = sender?.firstName || 'A user';
+          // ✅ FIXED: Extracted storeName accurately to avoid property 'storeName' does not exist compiler crashes
+          const senderName = (sender as any)?.vendor?.storeName || sender?.firstName || 'A user';
+          
           await this.notificationService.send({
             userId: recipientUserId,
             userEmail: recipient.email,
