@@ -7,10 +7,11 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma, Notification } from '@prisma/client';
 import axios from 'axios';
 import { GrowthCommissionLedgerService } from '../growth/ledger/commission-ledger.service';
 import { randomUUID } from 'crypto';
+import { NotificationService } from '../notification/notification.service';
 
 const Flutterwave = require('flutterwave-node-v3');
 
@@ -18,10 +19,12 @@ const Flutterwave = require('flutterwave-node-v3');
 export class PaymentsService implements OnModuleInit {
   private flw: any;
   private readonly logger = new Logger(PaymentsService.name);
+  
   private readonly COMMISSION_RATE = 0.1;
 
   constructor(private readonly prisma: PrismaService, 
     private readonly commissionLedgerService: GrowthCommissionLedgerService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   onModuleInit() {
@@ -224,6 +227,28 @@ export class PaymentsService implements OnModuleInit {
           totalPaid: paidAmount,
         },
       });
+
+      const customer =
+  await tx.user.findUnique({
+    where: {
+      id: payment.order.userId,
+    },
+    select: {
+      id: true,
+      email: true,
+      firstName: true,
+    },
+  });
+
+if (customer) {
+  await this.notificationService.send({
+    userId: customer.id,
+    userEmail: customer.email,
+    title: 'Payment Confirmed',
+    message: `Your payment for Order #${payment.orderId.slice(-6)} has been received successfully.`,
+    category: 'orderUpdates',
+  });
+}
 
       // 3. Trigger atomic escrow settlement allocations and clean stock deductions
       await this.settleOrderItems(tx, payment.order.items);
@@ -631,5 +656,15 @@ VENDOR NET: ${vendorNetEarning}
       where: { id: orderId },
       data: { status: OrderStatus.CANCELLED },
     });
-  }
+  
+
+  await this.notificationService.send({
+  userId: order.userId,
+  title: 'Payment Failed',
+  message:
+    'Your payment could not be completed. Please try again.',
+  category: 'orderUpdates',
+});
+
+}
 }

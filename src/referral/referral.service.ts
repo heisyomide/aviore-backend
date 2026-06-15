@@ -1,19 +1,23 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { VoucherStatus } from '@prisma/client';
+import { NotificationService } from '../notification/notification.service'; // ◄ 1. Import
 import * as crypto from 'crypto';
 
 @Injectable()
 export class ReferralService {
   private readonly logger = new Logger('ReferralService');
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService, // ◄ 2. Inject
+  ) {}
 
   /**
    * Generates a secure, non-guessable alphanumeric referral token identifier code.
    */
   generateSecureReferralCode(): string {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Avoids visually ambiguous characters (0, 1, I, O)
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = 'AVR-';
     for (let i = 0; i < 5; i++) {
       const randomIndex = crypto.randomInt(0, chars.length);
@@ -26,7 +30,6 @@ export class ReferralService {
    * Tracks and evaluates multi-dimensional velocity metrics for multi-account device farming prevention.
    */
   async evaluationSecurityFingerprint(ipAddress: string, fingerprint: string | null): Promise<boolean> {
-    // If an attacker completely withholds telemetry values, flag immediately as suspicious context
     if (!fingerprint && !ipAddress) return true;
 
     const [
@@ -44,14 +47,9 @@ export class ReferralService {
     const aggregateFingerprints = userFingerprintCount + logFingerprintCount;
     const aggregateIps = userIpCount + logIpCount;
 
-    // Trigger explicit fraud state if hardware signature is linked across > 3 locations 
-    // OR network footprint matches > 5 distinct profiles across historical systems.
     return aggregateFingerprints > 3 || aggregateIps > 5;
   }
 
-  /**
-   * Registers a brand-new user down the referral logging network chain during onboarding.
-   */
   /**
    * Registers a brand-new user down the referral logging network chain during onboarding.
    */
@@ -61,7 +59,6 @@ export class ReferralService {
     ip: string, 
     fingerprint: string | null
   ): Promise<void> {
-    // 1. Structural Exit: Terminate immediately if no token parameter was extracted from the request
     if (!codeUsed) {
       this.logger.log(`[Referral Engine] No referral code supplied for onboarding User ID: ${referredUserId}`);
       return;
@@ -70,12 +67,10 @@ export class ReferralService {
     const sanitizedCode = codeUsed.trim().toUpperCase();
     this.logger.log(`[Referral Engine] Processing link token "${sanitizedCode}" for User ID: ${referredUserId}`);
 
-    // 2. Database Lookup: Locate the target parent account
     const referrer = await this.prisma.user.findUnique({ 
       where: { referralCode: sanitizedCode } 
     });
 
-    // 💥 FIX: Clear system visibility alert when a referral code can't be matched in your database
     if (!referrer) {
       this.logger.error(
         `❌ REFERRAL LINK FAILURE: Token "${sanitizedCode}" does not exist in the system. Skipping graph mutations.`
@@ -83,7 +78,6 @@ export class ReferralService {
       return; 
     } 
 
-    // 3. Security Guard: Explicitly reject self-referral loop exploits
     if (referrer.id === referredUserId) {
       this.logger.warn(
         `🛑 SECURE EXPLOIT BLOCK: User ${referredUserId} attempted to use their own referral code.`
@@ -91,10 +85,9 @@ export class ReferralService {
       throw new BadRequestException('Invalid Operation: Self-referral loops are prohibited.');
     }
 
-    // 4. Security Guard: Prevent processing if user is already linked (Idempotency Check)
     const targetUser = await this.prisma.user.findUnique({
       where: { id: referredUserId },
-      select: { referredById: true }
+      select: { referredById: true, firstName: true } // Include fields for copywriting fallback
     });
 
     if (targetUser?.referredById) {
@@ -104,18 +97,14 @@ export class ReferralService {
       return;
     }
 
-    // 5. Telemetry Evaluation: Check for device farming / velocity indicators
     const checkFraud = await this.evaluationSecurityFingerprint(ip, fingerprint);
 
-    // 6. Transaction Pipeline: Execute graph mutations atomically
     await this.prisma.$transaction(async (tx) => {
-      // Link parent user directly inside the core graph layout
       await tx.user.update({
         where: { id: referredUserId },
         data: { referredById: referrer.id },
       });
 
-      // Commit immutable ledger entry audit logs for behavioral tracking
       await tx.referralLog.create({
         data: {
           referrerId: referrer.id,
@@ -124,7 +113,7 @@ export class ReferralService {
           ipAddress: ip,
           deviceFingerprint: fingerprint || null,
           isFraudulent: checkFraud,
-          isQualified: false, // Must remain false until identity validation events clear downstream
+          isQualified: false,
         },
       });
     });
@@ -133,12 +122,27 @@ export class ReferralService {
       `🎯 REFERRAL ENGINE COMPLETED: Linked Invite User [${referredUserId}] directly to Parent Referrer [${referrer.id}]`
     );
 
-    if (checkFraud) {
+    // ◄ 3. TRIGGER NOTIFICATION: PING PARENT USERS IMMEDIATELY ON SIGNUP
+    if (!checkFraud) {
+      try {
+        const joinerName = targetUser?.firstName  || 'A friend';
+        await this.notificationService.send({
+          userId: referrer.id,
+          userEmail: referrer.email,
+          title: '🥂 New Referral Signed Up!',
+          message: `${joinerName} just joined AVIORÈ using your invite link code. Keep sharing to unlock your ₦2,500 checkout milestone voucher!`,
+          category: 'promotions', // Maps to user promotional subscription settings
+        });
+      } catch (error: any) {
+        this.logger.error(`Failed sending referral signup alert to ${referrer.id}: ${error.message}`);
+      }
+    } else {
       this.logger.warn(
-        `🚨 FRAUD TRAIL LOGGED: Hardware signature [${fingerprint || 'UNKNOWN'}] or IP [${ip}] triggered velocity risk flags.`
+        `🚨 FRAUD TRAIL LOGGED: Hardware signature [${fingerprint || 'UNKNOWN'}] or IP [${ip}] triggered velocity risk flags. Notification suppressed.`
       );
     }
   }
+
   /**
    * Evaluates the qualification logic lifecycle status and handles campaign reward distributions cleanly.
    */
@@ -147,28 +151,32 @@ export class ReferralService {
       where: { referredUserId: verifiedUserId },
     });
 
-    // Terminate evaluation immediately if log does not exist, or if it has already been processed/flagged as fraud
     if (!trackingLog || trackingLog.isQualified || trackingLog.isFraudulent) return;
 
+    let voucherCodeCreated: string | null = null;
+
+    const referrer = await this.prisma.user.findUnique({
+      where: { id: trackingLog.referrerId },
+      select: { id: true, email: true, hasUnlockedVoucher: true }
+    });
+
+    if (!referrer) return;
+
     await this.prisma.$transaction(async (tx) => {
-      // 1. Lock referrer row explicitly to enforce absolute isolation constraints against concurrent writes
       const referrerProfile = await tx.user.findUnique({
         where: { id: trackingLog.referrerId },
         select: { hasUnlockedVoucher: true },
       });
 
-      // 2. Terminate transactional execution if a concurrent worker has already unlocked this tier milestone asset
       if (referrerProfile?.hasUnlockedVoucher) {
         return;
       }
 
-      // 3. Mark this specific registration record as officially qualified
       await tx.referralLog.update({
         where: { id: trackingLog.id },
         data: { isQualified: true },
       });
 
-      // 4. Calculate verification truth count of verified, clean records inside the isolation context
       const qualifiedCount = await tx.referralLog.count({
         where: {
           referrerId: trackingLog.referrerId,
@@ -177,18 +185,16 @@ export class ReferralService {
         },
       });
 
-      // 5. ATOMIC DISPATCHER GUARD: Verify threshold conditions match target constraints exactly
       if (qualifiedCount >= 5) {
         const secureRandomString = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const voucherCode = `VRF-${secureRandomString}`;
+        voucherCodeCreated = `VRF-${secureRandomString}`;
         
         const targetExpiry = new Date();
-        targetExpiry.setDate(targetExpiry.getDate() + 30); // 30-Day active lifespan validation window
+        targetExpiry.setDate(targetExpiry.getDate() + 30);
 
-        // Inject the production voucher asset into system engines
         await tx.voucher.create({
           data: {
-            code: voucherCode,
+            code: voucherCodeCreated,
             discountAmount: 2500,
             minimumOrder: 15000,
             status: VoucherStatus.ACTIVE,
@@ -197,23 +203,33 @@ export class ReferralService {
           },
         });
 
-        // Set the lock flag state permanently on the core user directory
         await tx.user.update({
           where: { id: trackingLog.referrerId },
           data: { hasUnlockedVoucher: true },
         });
 
-        this.logger.log(`🎉 MILESTONE MET: Issued Reward Voucher [${voucherCode}] to Referrer [${trackingLog.referrerId}]`);
+        this.logger.log(`🎉 MILESTONE MET: Issued Reward Voucher [${voucherCodeCreated}] to Referrer [${trackingLog.referrerId}]`);
       }
     });
+
+    // ◄ 4. TRIGGER NOTIFICATION: MILESTONE REWARD DISPATCHED SUCCESSFULLY
+    if (voucherCodeCreated) {
+      try {
+        await this.notificationService.send({
+          userId: referrer.id,
+          userEmail: referrer.email,
+          title: '🎉 ₦2,500 Reward Voucher Unlocked!',
+          message: `Congratulations! 5 successful referrals verified. Your exclusive checkout code is [${voucherCodeCreated}], valid for the next 30 days. Enjoy shopping on AVIORÈ!`,
+          category: 'promotions',
+        });
+      } catch (error: any) {
+        this.logger.error(`Failed sending milestone code alert to ${referrer.id}: ${error.message}`);
+      }
+    }
   }
 
   /**
    * Compiles the data payload for the animated progress bar frontend engine dashboard components.
-   */
-  /**
-   * Compiles the data payload for the animated progress bar frontend engine dashboard components.
-   * Includes a fully pre-encoded WhatsApp virality link tailored for growth.
    */
   async getReferralProgressDashboard(userId: string) {
     const [userMeta, qualifiedCount] = await Promise.all([
@@ -227,21 +243,16 @@ export class ReferralService {
     ]);
 
     const referralCode = userMeta?.referralCode || '';
-
-    // 🌟 CRAFT THE HIGH-CONVERTING WHATSAPP MESSAGE:
-    // This is the message text their friends will see.
     const messageText = `Hey! Check out Aviore, a marketplace where you can discover and shop from trusted vendors across Nigeria. 🛍️. Use my referral code *${referralCode}* when signing up to unlock an exclusive ₦2,500 checkout voucher code for your first purchase! \n\nGet started here: https://shopaviore.store/register?ref=${referralCode}`;
-
-    // Safely encode characters (like spaces, emojis, and question marks) so web browsers and phones read it flawlessly
     const whatsappShareUrl = `https://wa.me/?text=${encodeURIComponent(messageText)}`;
 
     return {
       referralCode: referralCode || null,
-      currentProgress: Math.min(qualifiedCount, 5), // Normalizes output matching the 5-step progress component threshold bounds
+      currentProgress: Math.min(qualifiedCount, 5),
       targetThreshold: 5,
       hasUnlockedVoucher: userMeta?.hasUnlockedVoucher || false,
       hasUsedReferralVoucher: userMeta?.hasUsedReferralVoucher || false,
-      whatsappShareUrl, // ◄ HAND THIS NEW LINK DIRECTLY TO THE FRONTEND
+      whatsappShareUrl,
     };
   }
 }

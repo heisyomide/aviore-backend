@@ -9,9 +9,11 @@ import { CouponsModule } from '../coupons/coupons.module';
 import { PrismaModule } from 'src/prisma.module';
 import { ProductsModule } from 'src/products/products.module';
 import { GrowthModule } from '../growth/growth.module'; // ➕ 1. Import your GrowthModule wrapper
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
   imports: [
+    NotificationModule,
     CouponsModule, 
     PrismaModule,
     ProductsModule,

@@ -4,6 +4,7 @@ import { CreateProductDto } from './dto/product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
 import { CreateVariantDto, UpdateVariantDto } from './dto/variant.dto';
+import { NotificationService } from 'src/notification/notification.service';
 
 @Injectable()
 export class ProductsService {
@@ -19,7 +20,9 @@ private tokenize(text: string) {
     .split(/\s+/)
     .filter(Boolean);
 }
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService,
+  private notificationService: NotificationService
+  ) {}
 
   /**
    * CREATE_PRODUCT_PROTOCOL
@@ -947,23 +950,42 @@ async searchProducts(
 
 async addReview(productId: string, userId: string, dto: { rating: number; comment: string }) {
   return this.prisma.$transaction(async (tx) => {
-    // 1. VERIFIED_PURCHASE_PROTOCOL
-    // We check for DELIVERED or COMPLETED to ensure the user actually has the artifact
+    // 1. VERIFIED_PURCHASE_PROTOCOL & RELATION FETCHING
+    // We include the user object to extract the reviewer's name cleanly
     const purchaseNode = await tx.order.findFirst({
       where: {
         userId,
-        status: { in: ['DELIVERED', 'COMPLETED'] }, // ✅ Fixed the blocking status
+        status: { in: ['DELIVERED', 'COMPLETED'] },
         items: { some: { productId } }
       },
-      select: { vendorId: true }
+      include: {
+        user: true // ✅ Fixes 'Property user does not exist' compilation error
+      }
     });
 
     if (!purchaseNode || !purchaseNode.vendorId) {
       throw new ForbiddenException('Review_Denied: No verified delivery record found for this user/product pairing');
     }
 
+    // Eagerly fetch product metadata and its associated vendor account keys
+    const productInfo = await tx.product.findUnique({
+      where: { id: productId },
+      select: {
+        title: true,
+        vendor: {
+          select: {
+            userId: true,
+            user: { select: { email: true } }
+          }
+        }
+      }
+    });
+
+    if (!productInfo || !productInfo.vendor) {
+      throw new NotFoundException('Product_Not_Found: Target product metadata or vendor mapping missing');
+    }
+
     // 2. IDEMPOTENCY_CHECK
-    // Prevents "Review Spamming" (1 review per artifact per user)
     const alreadyEvaluated = await tx.review.findFirst({
       where: { productId, userId }
     });
@@ -991,13 +1013,27 @@ async addReview(productId: string, userId: string, dto: { rating: number; commen
     });
 
     // 5. ARTIFACT_SCORE_SYNC
-    // Updates the product record so the storefront doesn't have to calculate averages on every load
     await tx.product.update({
       where: { id: productId },
       data: {
         averageRating: stats._avg.rating ? parseFloat(stats._avg.rating.toFixed(1)) : 0,
         reviewCount: stats._count.rating,
       },
+    });
+
+    // 6. DUAL-CHANNEL REAL-TIME NOTIFICATION
+    // Safely fallback depending on your User schema structure (name vs firstName/lastName/username)
+    const userObj = purchaseNode.user as any;
+    const customerName = userObj?.firstName 
+      ? `${userObj.firstName} ${userObj.lastName || ''}`.trim()
+      : userObj?.username || userObj?.name || 'A customer';
+    
+    await this.notificationService.send({
+      userId: productInfo.vendor.userId,
+      userEmail: productInfo.vendor.user.email,
+      title: 'New Product Review ⭐',
+      message: `${customerName} left a ${dto.rating}-star review on your product "${productInfo.title}".`,
+      category: 'storeActivity', // Automatically checked against vendor preferences table!
     });
 
     return review;

@@ -7,9 +7,11 @@ import { PricingService } from './pricing.service';
 import { InventoryService } from './inventory.service';
 import { OrdersController } from './orders.controller';
 import { OrderFulfillmentController } from './order-fulfillment.controller';
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
   imports: [
+    NotificationModule,
     PaymentsModule,
     PayoutModule // Import your payout module to resolve SettlementService smoothly
   ],

@@ -2,8 +2,13 @@ import { Module } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
 import { PrismaService } from '../prisma.service'; // Ensure the path is correct
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
+
+  imports: [
+    NotificationModule, // 
+  ],
     
   controllers: [ProductsController],
   providers: [ProductsService, PrismaService],

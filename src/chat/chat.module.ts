@@ -6,9 +6,11 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ChatService } from './chat.service';
 import { ChatGateway } from './chat.gateway';
 import { PrismaService } from '../prisma.service';
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
   imports: [
+    NotificationModule,
     // 1. Import JwtModule so JwtService can be injected into ChatService
     JwtModule.registerAsync({
       imports: [ConfigModule],

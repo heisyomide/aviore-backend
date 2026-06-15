@@ -14,6 +14,7 @@ import { VendorCreateProductDto  } from './dto/vendor-product.dto';
 import { OrderStatus, Prisma, ProductStatus } from '@prisma/client'; // Import the auto-generated enum
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'; 
 import { Roles } from '../auth/roles.decorator';
+import { NotificationService } from '../notification/notification.service';
 
 
 @Injectable()
@@ -22,7 +23,9 @@ export class VendorService {
   createProduct(vendorId: any, dto: VendorCreateProductDto , file: Express.Multer.File) {
     throw new Error('Method not implemented.');
   }
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService
+  ) {}
 
   /**
    * Fetches dashboard statistics for the logged-in vendor.
@@ -217,8 +220,12 @@ async requestWithdrawal(vendorId: string, amount: number) {
   const wallet = await this.prisma.vendorWallet.findUnique({
     where: { vendorId },
     include: {
-      vendor: true, // IMPORTANT: get full vendor profile
+  vendor: {
+    include: {
+      user: true,
     },
+  },
+}
   });
 
   if (!wallet) {
@@ -276,6 +283,13 @@ async requestWithdrawal(vendorId: string, amount: number) {
         },
       },
     });
+    await this.notificationService.send({
+  userId: vendor.userId,
+  userEmail: vendor.user?.email,
+  title: 'Withdrawal Requested',
+  message: `Your withdrawal request of ₦${amount.toLocaleString()} has been submitted and is awaiting approval.`,
+  category: 'withdrawals',
+});
 
     // 3. LEDGER ENTRY
 await tx.walletTransaction.create({
@@ -935,18 +949,35 @@ async updateOrderStatus(
   dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
 ) {
   try {
-    return await this.prisma.order.update({
-      where: { 
-        id: orderId,
-        vendorId: vendorId // 🛡️ Security: Ensures the vendor owns this order
-      },
-      data: { 
-        status: dto.status,
-        // Only update tracking if the values are actually sent in the request
-        ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
-        ...(dto.carrier && { carrier: dto.carrier }),
-      }
-    });
+const order = await this.prisma.order.update({
+  where: {
+    id: orderId,
+    vendorId,
+  },
+  data: {
+    status: dto.status,
+    ...(dto.trackingNumber && {
+      trackingNumber: dto.trackingNumber,
+    }),
+    ...(dto.carrier && {
+      carrier: dto.carrier,
+    }),
+  },
+  include: {
+    user: true,
+  },
+});
+
+    await this.notificationService.send({
+  userId: order.userId,
+  userEmail: order.user.email,
+  title: 'Order Updated',
+  message: `Your order is now ${status}.`,
+  category: 'orderUpdates',
+});
+
+return order;
+
   } catch (error: unknown) {
   if (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -996,6 +1027,9 @@ async getReturnRequests(userId: string) {
     where: { userId },
     select: { id: true }
   });
+
+
+  
 
   if (!vendor) throw new NotFoundException('Vendor_Registry_Not_Found');
 

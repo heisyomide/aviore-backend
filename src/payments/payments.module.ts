@@ -19,9 +19,11 @@ import { DeadLetterProcessor } from './workers/dead-letter.processor';
 
 // External Domain Modules
 import { GrowthModule } from '../growth/growth.module'; // ◄ 🟥 Imported cleanly using a relative target path
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
   imports: [
+    NotificationModule,
     GrowthModule, // ◄ 🟥 ADD THIS HERE so PaymentsService can resolve GrowthCommissionLedgerService!
     BullModule.registerQueue(
       {

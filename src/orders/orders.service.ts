@@ -4,7 +4,7 @@ import { PaymentInitializerService } from '../payments/services/payment-initiali
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PricingService, CartItemInput } from './pricing.service';
 import { InventoryService } from './inventory.service';
-
+import { NotificationService } from '../notification/notification.service'
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -13,7 +13,8 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly PaymentInitializerService: PaymentInitializerService,
     private readonly pricingService: PricingService,
-    private readonly inventoryService: InventoryService
+    private readonly inventoryService: InventoryService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -44,6 +45,14 @@ export class OrdersService {
       // Structural inventory guardrails to protect against checkout race conditions
       await this.inventoryService.verifyStockAvailability(tx, inputItems);
       await this.inventoryService.deductInventory(tx, inputItems);
+
+      await this.notificationService.send({
+  userId,
+  userEmail: user.email,
+  title: 'Order Created',
+  message: `Your order #${order.id.slice(-8).toUpperCase()} has been created successfully and is awaiting payment.`,
+  category: 'orderUpdates',
+});
 
       const newOrder = await tx.order.create({
         data: {
@@ -94,6 +103,15 @@ items: {
         user.firstName || 'Customer'
       );
 
+      await this.notificationService.send({
+  userId,
+  userEmail: user.email,
+  title: 'Payment Link Ready',
+  message:
+    'Your payment session has been created. Complete payment to begin order processing.',
+  category: 'orderUpdates',
+});
+
       return {
         success: true,
         message: 'TRANSACTION_AUTHORIZED',
@@ -113,7 +131,11 @@ items: {
           paymentLink: null,
         },
       };
+
+      
     }
+
+
   }
 
   /**

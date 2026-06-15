@@ -8,6 +8,7 @@ import { UsersService } from 'src/users/users.service';
 import { MailService } from 'src/mail/mail.service';
 import * as crypto from 'crypto';
 import { ReferralService } from 'src/referral/referral.service';
+import { NotificationService } from 'src/notification/notification.service';
 
 @Injectable()
 export class AuthService {
@@ -16,7 +17,8 @@ export class AuthService {
     private jwtService: JwtService,
     private usersService: UsersService,
     private mailService: MailService,
-    private readonly referralService: ReferralService
+    private readonly referralService: ReferralService,
+    private notificationService: NotificationService
   ) {}
 
 
@@ -391,6 +393,15 @@ async login(loginDto: LoginDto, req: any) {
     );
   });
 
+this.notificationService.send({
+    userId: user.id,
+    userEmail: user.email,
+    title: '🔒 New Login Detected',
+    message: `A new login session was opened from ${userAgent} (${ip}). If this wasn't you, secure your account immediately.`,
+    category: 'security', // Categorized securely so it overrides normal toggle suppressions if needed
+  }).catch((err) => {
+    console.error('NOTIFICATION SERVICE ERROR:', err.message);
+  });
   // =========================
   // RESPONSE
   // =========================

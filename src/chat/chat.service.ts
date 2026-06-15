@@ -1,12 +1,14 @@
 import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { JwtService } from '@nestjs/jwt';
+import { NotificationService } from '../notification/notification.service'; 
 
 @Injectable()
 export class ChatService {
   constructor(
     private prisma: PrismaService,
-    private jwtService: JwtService
+    private jwtService: JwtService,
+    private notificationService: NotificationService 
   ) {}
 
   /**
@@ -16,10 +18,6 @@ export class ChatService {
   async verifyToken(token: string) {
     try {
       const payload = this.jwtService.verify(token);
-      
-      // CRITICAL: Normalization Protocol
-      // If the ID is hidden in 'sub' (Passport default), we map it to 'id' 
-      // so the Gateway logic doesn't crash.
       return {
         ...payload,
         id: payload.id || payload.sub, 
@@ -41,11 +39,8 @@ export class ChatService {
     });
 
     if (!conversation) return false;
-    
-    // Direct check for Buyer node
     if (conversation.userId === userId) return true;
 
-    // Deep check for Merchant owner node
     const vendorRecord = await this.prisma.vendor.findUnique({
       where: { id: conversation.vendorId },
       select: { userId: true }
@@ -64,7 +59,7 @@ export class ChatService {
     vendorId: string; 
     content: string 
   }) {
-    return this.prisma.$transaction(async (tx) => {
+    const conversation = await this.prisma.$transaction(async (tx) => {
       return await tx.orderConversation.create({
         data: {
           orderId: data.orderId,
@@ -84,6 +79,37 @@ export class ChatService {
         }
       });
     });
+
+    // TRIGGER CHAT NOTIFICATION FOR INITIAL MESSAGE
+    try {
+      const recipientUserId = await this.getRecipientId(conversation.id, data.userId);
+      if (recipientUserId) {
+        const recipient = await this.prisma.user.findUnique({
+          where: { id: recipientUserId },
+          select: { email: true, firstName: true }
+        });
+
+        const sender = await this.prisma.user.findUnique({
+          where: { id: data.userId },
+          select: { firstName: true } // ✅ FIXED: Removed non-existent username selection
+        });
+
+        if (recipient) {
+          const senderName = sender?.firstName || 'A customer';
+          await this.notificationService.send({
+            userId: recipientUserId,
+            userEmail: recipient.email,
+            title: '📩 New Message on Order',
+            message: `${senderName} started a conversation: "${data.content.slice(0, 60)}${data.content.length > 60 ? '...' : ''}"`,
+            category: 'chatMessages', 
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('🔴 Chat Notification Link Error:', error.message);
+    }
+
+    return conversation;
   }
 
   /**
@@ -96,8 +122,8 @@ export class ChatService {
     senderRole: string; 
     senderId: string 
   }) {
-    return this.prisma.$transaction(async (tx) => {
-      const message = await tx.orderMessage.create({
+    const message = await this.prisma.$transaction(async (tx) => {
+      const msg = await tx.orderMessage.create({
         data: {
           conversationId: data.conversationId,
           content: data.content,
@@ -106,14 +132,44 @@ export class ChatService {
         },
       });
 
-      // Transmit heartbeat to the main registry
       await tx.orderConversation.update({
         where: { id: data.conversationId },
         data: { updatedAt: new Date() },
       });
 
-      return message;
+      return msg;
     });
+
+    // TRIGGER CHAT NOTIFICATION FOR RECURRING MESSAGES
+    try {
+      const recipientUserId = await this.getRecipientId(data.conversationId, data.senderId);
+      if (recipientUserId) {
+        const recipient = await this.prisma.user.findUnique({
+          where: { id: recipientUserId },
+          select: { email: true }
+        });
+
+        const sender = await this.prisma.user.findUnique({
+          where: { id: data.senderId },
+          select: { firstName: true }
+        });
+
+        if (recipient) {
+          const senderName = sender?.firstName || 'A user';
+          await this.notificationService.send({
+            userId: recipientUserId,
+            userEmail: recipient.email,
+            title: `💬 Message from ${senderName}`,
+            message: data.content.length > 70 ? `${data.content.slice(0, 70)}...` : data.content,
+            category: 'chatMessages',
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('🔴 Chat Reply Notification Link Error:', error.message);
+    }
+
+    return message;
   }
 
   /**
@@ -135,7 +191,6 @@ export class ChatService {
 
     const vendorUserId = vendor?.userId ?? null;
 
-    // Logic: Route to the human currently NOT sending the message
     return senderId === convo.userId ? vendorUserId : convo.userId;
   }
 }

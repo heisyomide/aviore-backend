@@ -36,6 +36,7 @@ import { VoucherModule } from './voucher/voucher.module';
 import { AntiAbuseService } from './common/services/anti-abuse.service';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { GrowthModule } from './growth/growth.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Global()
 @Module({
@@ -151,7 +152,8 @@ import { GrowthModule } from './growth/growth.module';
     ReferralModule,
     VoucherModule,
     AnalyticsModule,
-    GrowthModule
+    GrowthModule,
+    NotificationModule
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService, AntiAbuseService],

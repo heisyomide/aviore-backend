@@ -11,6 +11,7 @@ import { UsersModule } from '../users/users.module';
 import { MailModule } from '../mail/mail.module';
 import { PrismaService } from '../prisma.service';
 import { ReferralModule } from '../referral/referral.module';
+import { NotificationModule } from 'src/notification/notification.module';
 
 const JWT_SECRET =
   process.env.JWT_SECRET ||
@@ -25,6 +26,7 @@ console.log('=======================================\n');
     UsersModule,
     MailModule,
     ReferralModule,
+    NotificationModule,
 
     PassportModule.register({
       defaultStrategy: 'jwt',

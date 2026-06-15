@@ -8,6 +8,7 @@ import { Resend } from 'resend';
 import { PaymentsService } from '../payments/payments.service';
 import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
 import { GrowthVendorsActivationService } from 'src/growth/vendors/vendors-activation.service';
+import { NotificationService } from 'src/notification/notification.service';
 
 
 
@@ -19,6 +20,8 @@ export class AdminService {
   private prisma: PrismaService,
   private paymentsService: PaymentsService,
   private readonly activationService: GrowthVendorsActivationService,
+   private readonly notificationService: NotificationService,
+
 ) {}
 
 
@@ -398,15 +401,17 @@ async getPendingProducts() {
 // src/admin/admin.service.ts
 
 async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
-  return this.prisma.$transaction(async (tx) => {
-    // First, fetch the product to do proper validation
+  // 🟥 FIX: Typed tx as any here to ensure seamless database method passing
+  return this.prisma.$transaction(async (tx: any) => {
+    // 1. FETCH PRODUCT WITH COMPLETE VENDOR GRAPH RELATION MAPPINGS
     const existingProduct = await tx.product.findUnique({
       where: { id },
-      select: { 
-        id: true, 
-        isDeleted: true, 
-        status: true,
-        vendorId: true 
+      include: {
+        vendor: {
+          include: {
+            user: true
+          }
+        }
       }
     });
 
@@ -423,17 +428,16 @@ async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
       throw new Error(`Product is already ${existingProduct.status}`);
     }
 
-    // Now perform the update
+    // 2. NOW PERFORM THE UPDATE
     const updatedProduct = await tx.product.update({
       where: { id },
       data: { 
         status,
-        // Optional: If approved, make it active automatically
         ...(status === ProductStatus.APPROVED && { isActive: true })
       }
     });
 
-    // Audit Log
+    // 3. AUDIT LOG MAPPING LOGIC
     let auditAction: AuditAction;
     if (status === ProductStatus.APPROVED) {
       auditAction = AuditAction.APPROVE_PRODUCT;
@@ -453,8 +457,34 @@ async updateProductStatus(id: string, status: ProductStatus, adminId: string) {
       }
     });
 
-    // 💡 AUTOMATIC GROWTH INTERCEPTOR HOOK
-    // If the product was approved or rejected, automatically re-evaluate the vendor's active metrics
+    // 4. DYNAMIC ADMIN ACTION NOTIFICATION DISPATCHER
+    if (existingProduct.vendor?.user) {
+      const vendorUser = existingProduct.vendor.user;
+      
+      // 🟥 FIXES: Changed existingProduct.name to existingProduct.title across all 3 strings
+      const productTitle = (existingProduct as any).title || (existingProduct as any).name || 'Your product';
+      
+      let notificationTitle = 'Product Under Review 🛒';
+      let notificationMessage = `Your product update for "${productTitle}" is currently being processed.`;
+
+      if (status === ProductStatus.APPROVED) {
+        notificationTitle = 'Product Approved! 🎉';
+        notificationMessage = `Great news! Your product "${productTitle}" has been approved by administration and is now live on AVIORÈ.`;
+      } else if (status === ProductStatus.REJECTED) {
+        notificationTitle = 'Product Modification Required ⚠️';
+        notificationMessage = `Your product submission "${productTitle}" was not approved. Please review our marketplace guidelines and update your listing parameters.`;
+      }
+
+      await this.notificationService.send({
+        userId: vendorUser.id,
+        userEmail: vendorUser.email,
+        title: notificationTitle,
+        message: notificationMessage,
+        category: 'storeActivity',
+      });
+    }
+
+    // 5. AUTOMATIC GROWTH INTERCEPTOR HOOK
     if (status === ProductStatus.APPROVED || status === ProductStatus.REJECTED) {
       await this.activationService.evaluateVendorActivationWithTx(
         existingProduct.vendorId, 
@@ -784,7 +814,6 @@ async executeBroadcast(dto: {
 }, adminId: string) {
   
   // 1. IDENTITY MAPPING PROTOCOL
-  // Translates plural frontend strings to strict singular Prisma Enums
   const roleMapping: Record<string, Role | undefined> = {
     'VENDORS': Role.VENDOR,
     'CUSTOMERS': Role.CUSTOMER,
@@ -796,21 +825,42 @@ async executeBroadcast(dto: {
   // 2. FETCH AUDIENCE FROM REGISTRY
   const users = await this.prisma.user.findMany({
     where: targetRole ? { role: targetRole } : {},
-    select: { email: true, pushToken: true }
+    select: { id: true, email: true, pushToken: true }
   });
 
   if (users.length === 0) {
-    return { status: 'NO_TARGETS_FOUND', results: { pushCount: 0, emailCount: 0 } };
+    return { status: 'NO_TARGETS_FOUND', results: { pushCount: 0, emailCount: 0, feedCount: 0 } };
   }
 
-  const results = { pushCount: 0, emailCount: 0 };
+  const results = { pushCount: 0, emailCount: 0, feedCount: 0 };
 
-  // 3. PUSH RELAY (Firebase Batch Protocol)
+  // 3. PERSISTENT IN-APP FEED NOTIFICATION PIPELINE
+  try {
+    const feedRecords = users.map(user => ({
+      userId: user.id,
+      title: dto.title,
+      message: dto.message,
+      category: 'promotions', 
+      type: 'BROADCAST', // ✅ FIXED: Added the mandatory required schema field
+      isRead: false,
+    }));
+
+    // Use Prisma's high-speed createMany protocol for raw execution speed
+    const batchFeed = await this.prisma.notification.createMany({
+      data: feedRecords,
+      skipDuplicates: true,
+    });
+    
+    results.feedCount = batchFeed.count;
+  } catch (feedError: any) {
+    console.error('🔴 BROADCAST_FEED_SYNC_FAIL:', feedError.message);
+  }
+
+  // 4. PUSH RELAY (Firebase Batch Protocol)
   if (dto.channels.push) {
     const tokens = users.map(u => u.pushToken).filter(t => !!t) as string[];
     
     if (tokens.length > 0) {
-      // Firebase limits sendEachForMulticast to 500 tokens per call
       for (let i = 0; i < tokens.length; i += 500) {
         const batch = tokens.slice(i, i + 500);
         await admin.messaging().sendEachForMulticast({
@@ -823,103 +873,95 @@ async executeBroadcast(dto: {
     }
   }
 
-  // 4. EMAIL RELAY (Resend Batch Protocol)
+  // 5. EMAIL RELAY (Resend Batch Protocol)
   if (dto.channels.email) {
-  // 🛡️ Filter out any null, undefined, or empty emails to prevent payload corruption
-  const emailList = users.map(u => u.email).filter(email => !!email);
-  
-  if (emailList.length > 0) {
-    try {
-      // Resend batch endpoint accepts up to 150 items per call. 100 is the optimal chunk size.
-      const batchSize = 100;
-      
-      for (let i = 0; i < emailList.length; i += batchSize) {
-        const emailChunk = emailList.slice(i, i + batchSize);
+    const emailList = users.map(u => u.email).filter(email => !!email);
+    
+    if (emailList.length > 0) {
+      try {
+        const batchSize = 100;
         
-        // Map each email to its own completely isolated payload object
-        const batchPayload = emailChunk.map(targetEmail => ({
-          from: 'AVIORÈ <no-reply@shopaviore.store>',
-          to: targetEmail, // 🔒 Fixed: Ensures users only see their own email address
-          subject: dto.title,
-          html: `
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>${dto.title}</title>
-              </head>
-              <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
-                <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
-                  
-                  <!-- HEADER LOGO -->
-                  <tr>
-                    <td style="padding: 40px 40px 20px 40px; text-align: left;">
-                      <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
-                    </td>
-                  </tr>
+        for (let i = 0; i < emailList.length; i += batchSize) {
+          const emailChunk = emailList.slice(i, i + batchSize);
+          
+          const batchPayload = emailChunk.map(targetEmail => ({
+            from: 'AVIORÈ <no-reply@shopaviore.store>',
+            to: targetEmail,
+            subject: dto.title,
+            html: `
+              <!DOCTYPE html>
+              <html>
+                <head>
+                  <meta charset="utf-8">
+                  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                  <title>${dto.title}</title>
+                </head>
+                <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+                  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+                    
+                    <tr>
+                      <td style="padding: 40px 40px 20px 40px; text-align: left;">
+                        <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
+                      </td>
+                    </tr>
 
-                  <!-- LINE SEPARATOR -->
-                  <tr>
-                    <td style="padding: 0 40px;">
-                      <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
-                    </td>
-                  </tr>
+                    <tr>
+                      <td style="padding: 0 40px;">
+                        <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
+                      </td>
+                    </tr>
 
-                  <!-- BODY CONTENT -->
-                  <tr>
-                    <td style="padding: 40px 40px 30px 40px;">
-                      <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
-                        ${dto.title}
-                      </h1>
-                      <p style="color: #a3a3a3; font-size: 15px; line-height: 1.7; font-weight: 300; margin: 0 0 32px 0;">
-                        ${dto.message.replace(/\n/g, '<br>')}
-                      </p>
-                    </td>
-                  </tr>
+                    <tr>
+                      <td style="padding: 40px 40px 30px 40px;">
+                        <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
+                          ${dto.title}
+                        </h1>
+                        <p style="color: #a3a3a3; font-size: 15px; line-height: 1.7; font-weight: 300; margin: 0 0 32px 0;">
+                          ${dto.message.replace(/\n/g, '<br>')}
+                        </p>
+                      </td>
+                    </tr>
 
-                  <!-- FOOTER SYSTEM ARCHITECTURE -->
-                  <tr>
-                    <td style="padding: 0 40px 40px 40px;">
-                      <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
-                        <tr>
-                          <td>
-                            <p style="margin: 0 0 4px 0; font-size: 10px; font-weight: 600; color: #404040; text-transform: uppercase; letter-spacing: 2px;">
-                              Secure Distribution // Aviorè Command Center
-                            </p>
-                            <p style="margin: 0; font-size: 11px; color: #262626;">
-                              This message was transmitted securely via internal system configurations.
-                            </p>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
+                    <tr>
+                      <td style="padding: 0 40px 40px 40px;">
+                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
+                          <tr>
+                            <td>
+                              <p style="margin: 0 0 4px 0; font-size: 10px; font-weight: 600; color: #404040; text-transform: uppercase; letter-spacing: 2px;">
+                                Secure Distribution // Aviorè Command Center
+                              </p>
+                              <p style="margin: 0; font-size: 11px; color: #262626;">
+                                This message was transmitted securely via internal system configurations.
+                              </p>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
 
-                </table>
-              </body>
-            </html>
-          `,
-        }));
+                  </table>
+                </body>
+              </html>
+            `,
+          }));
 
-        // Fire the clean, isolated batch array out to Resend's network
-        await this.resend.batch.send(batchPayload);
-        results.emailCount += emailChunk.length;
+          await this.resend.batch.send(batchPayload);
+          results.emailCount += emailChunk.length;
+        }
+      } catch (error) {
+        console.error('SECURE_EMAIL_BATCH_FAILURE:', error);
       }
-    } catch (error) {
-      console.error('SECURE_EMAIL_BATCH_FAILURE:', error);
     }
   }
-}
 
-  // 5. LOG AUTHORITY ACTION
+  // 6. LOG AUTHORITY ACTION
   await this.prisma.auditLog.create({
     data: {
       adminId,
-      action: 'UPDATE_COUPON' as any, // Temporary fallback enum
+      action: 'UPDATE_COUPON' as any, 
       targetType: 'SYSTEM_BROADCAST',
       targetId: 'GLOBAL',
-      details: `DEPLOYED: ${dto.title} | Target: ${dto.target} | Push: ${results.pushCount} | Email: ${results.emailCount}`,
+      details: `DEPLOYED: ${dto.title} | Target: ${dto.target} | Push: ${results.pushCount} | Email: ${results.emailCount} | In-App Feed: ${results.feedCount}`,
     },
   });
 
@@ -1155,17 +1197,18 @@ async approveWithdrawal(
 ) {
   return this.prisma.$transaction(
     async (tx) => {
-      const request =
-        await tx.withdrawalRequest.findUnique({
-          where: { id },
-          include: {
-            vendor: {
-              select: {
-                storeName: true,
-              },
-            },
-          },
-        });
+const request =
+  await tx.withdrawalRequest.findUnique({
+    where: { id },
+
+    include: {
+      vendor: {
+        include: {
+          user: true,
+        },
+      },
+    },
+  });
 
       if (!request) {
         throw new NotFoundException(
@@ -1238,6 +1281,14 @@ async approveWithdrawal(
           },
         });
 
+        await this.notificationService.send({
+  userId: request.vendor.userId,
+  userEmail: request.vendor.user?.email,
+  title: 'Withdrawal Approved',
+  message: `Your withdrawal of ₦${request.amount} is being processed by the bank.`,
+  category: 'withdrawals',
+});
+
         await tx.walletTransaction.updateMany({
   where: {
     withdrawalRequestId: request.id,
@@ -1285,9 +1336,13 @@ async rejectWithdrawal(
       const request =
         await tx.withdrawalRequest.findUnique({
           where: { id },
-          include: {
-            vendor: true,
-          },
+include: {
+  vendor: {
+    include: {
+      user: true,
+    },
+  },
+}
         });
 
       if (!request) {
@@ -1348,6 +1403,16 @@ await tx.vendorWallet.update({
             },
           },
         });
+
+        await this.notificationService.send({
+  userId: request.vendor.userId,
+  userEmail: request.vendor.user?.email,
+  title: 'Withdrawal Rejected',
+  message:
+    reason ||
+    'Your withdrawal request was rejected by the administrator.',
+  category: 'withdrawals',
+});
 
         await tx.walletTransaction.updateMany({
   where: {

@@ -3,8 +3,10 @@ import { BullModule } from '@nestjs/bull';
 import { MailService } from './mail.service';
 import { MailProcessor } from './mail.processor';
 import { MailDebugController } from './mail-debug.controller'; 
+import { NotificationModule } from 'src/notification/notification.module';
 @Module({
   imports: [
+    NotificationModule,
     // Register the 'mail-queue'
     BullModule.registerQueue({
       name: 'mail-queue',
