@@ -30,6 +30,16 @@ export class GrowthCommissionLedgerService {
       }
     });
 
+    // 🔴 DEBUG LOG 1: VENDOR CHECK
+    this.logger.warn(`
+=== GROWTH SPLIT DEBUG ===
+vendorId=${vendorId}
+vendorExists=${!!vendor}
+marketerId=${vendor?.marketerId}
+growthStatus=${vendor?.growthStatus}
+platformNetPool=${platformNetPool.toString()}
+`);
+
     // If the vendor wasn't brought in via the growth program, isn't ACTIVE, or has no marketer link, skip splits safely
     if (!vendor || !vendor.marketerId || vendor.growthStatus !== 'ACTIVE') {
       this.logger.warn(`Skipping marketer split calculation for Vendor ${vendorId}. growthStatus: ${vendor?.growthStatus ?? 'NULL'}`);
@@ -40,6 +50,12 @@ export class GrowthCommissionLedgerService {
     const GROWTH_POOL_ALLOCATION_RATE = new Prisma.Decimal('0.20');
     const growthPoolAmount = platformNetPool.mul(GROWTH_POOL_ALLOCATION_RATE);
 
+    // 🔴 DEBUG LOG 2: POOL CALCULATION
+    this.logger.warn(`
+=== GROWTH POOL ===
+growthPoolAmount=${growthPoolAmount.toString()}
+`);
+
     if (growthPoolAmount.lte(0)) {
       return new Prisma.Decimal(0);
     }
@@ -49,6 +65,14 @@ export class GrowthCommissionLedgerService {
       where: { id: vendor.marketerId },
       select: { id: true, role: true, teamCode: true }
     });
+
+    // 🔴 DEBUG LOG 3: MARKETER NODE LOOKUP
+    this.logger.warn(`
+=== MARKETER DEBUG ===
+marketerId=${primaryMarketer?.id}
+role=${primaryMarketer?.role}
+teamCode=${primaryMarketer?.teamCode}
+`);
 
     if (!primaryMarketer) {
       this.logger.error(`CRITICAL: Marketer record missing for ID ${vendor.marketerId} tied to Vendor ${vendorId}`);
@@ -94,13 +118,12 @@ export class GrowthCommissionLedgerService {
         create: { marketerId: subMarketerId, balance: subMarketerEarnings }
       });
 
-      // NOTE: Verify model name vs schema.prisma property if compilation error persists
       await (tx as any).growthLedgerEntry.create({
         data: {
           marketerId: subMarketerId,
           orderId,
           vendorId,
-          amount: subMarketerEarnings.toNumber(), // float column alignment fallback
+          amount: subMarketerEarnings.toNumber(), 
           description: `Direct referral sales commission share from Order Item #${orderItemId}`,
         }
       });
@@ -113,13 +136,12 @@ export class GrowthCommissionLedgerService {
         create: { marketerId: headMarketerId, balance: headMarketerEarnings }
       });
 
-      // NOTE: Verify model name vs schema.prisma property if compilation error persists
       await (tx as any).growthLedgerEntry.create({
         data: {
           marketerId: headMarketerId,
           orderId,
           vendorId,
-          amount: headMarketerEarnings.toNumber(), // float column alignment fallback
+          amount: headMarketerEarnings.toNumber(), 
           description: subMarketerId 
             ? `Team override commission bonus from sub-marketer processing Order Item #${orderItemId}`
             : `Direct merchant referral sales commission share from Order Item #${orderItemId}`,
