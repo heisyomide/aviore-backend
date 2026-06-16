@@ -340,11 +340,14 @@ async handleWebhook(signature: string, body: any) {
 // =====================================================
   // HIGH-PERFORMANCE ESCROW SPLIT ENGINE - MULTI-VENDOR SECURE
   // =====================================================
+ // =====================================================
+  // HIGH-PERFORMANCE ESCROW SPLIT ENGINE - MULTI-VENDOR SECURE
+  // =====================================================
   private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
     if (!items?.length) return;
 
+    // 1. Batch fetch all product/vendor context upfront to eliminate N+1 queries
     const productIds = items.map((item) => item.productId).filter(Boolean);
-
     const products = await tx.product.findMany({
       where: { id: { in: productIds } },
       include: {
@@ -352,149 +355,134 @@ async handleWebhook(signature: string, body: any) {
           select: {
             id: true,
             marketerId: true,
+            growthStatus: true,
           },
         },
       },
     });
 
-    for (const item of items) {
-      const product = products.find((p) => p.id === item.productId);
+    // 2. Concurrently execute math & DB writes across all items safely bound inside the parent transaction
+    await Promise.all(
+      items.map(async (item) => {
+        const product = products.find((p) => p.id === item.productId);
 
-      if (!product || !product.vendorId) {
-        this.logger.error(`CRITICAL: Product context or Vendor link missing for Product ID: ${item.productId}`);
-        throw new NotFoundException(`PRODUCT_NOT_FOUND_OR_VENDOR_UNLINKED: ${item.productId}`);
-      }
+        if (!product || !product.vendorId) {
+          this.logger.error(`CRITICAL: Product context or Vendor link missing for Product ID: ${item.productId}`);
+          throw new NotFoundException(`PRODUCT_NOT_FOUND_OR_VENDOR_UNLINKED: ${item.productId}`);
+        }
 
-      const currentVendorId = product.vendorId;
+        const currentVendorId = product.vendorId;
 
-      // Resolve Marketer Identity Node safely
-      let marketerId: string | null = product.vendor?.marketerId ?? null;
-      if (!marketerId) {
-        const fallbackVendor = await tx.vendor.findUnique({
-          where: { id: currentVendorId },
-          select: { marketerId: true }
-        });
-        marketerId = fallbackVendor?.marketerId ?? null;
-      }
-
-      // --- AIRTIGHT DECIMAL WATERFALL FLOW (FIXES PROBLEMS 2 & 3) ---
-      const priceAtPurchase = new Prisma.Decimal(item.priceAtPurchase);
-      const quantity = new Prisma.Decimal(item.quantity);
-      
-      // 1. Calculate Gross Allocation for this specific line item
-      const dbGross = priceAtPurchase.mul(quantity);
-      
-      // 2. Platform Fee Pool (Strict 10% fee baseline)
-      const dbPlatformCommission = dbGross.mul(new Prisma.Decimal(String(this.COMMISSION_RATE))); 
-      
-      // 3. Deduct Vouchers and Discounts cleanly from the platform's cut
-      const dbVendorCouponAmount = new Prisma.Decimal(item.vendorCouponAmount ?? 0);
-      const dbReferralVoucherAmount = new Prisma.Decimal(item.referralVoucherAmount ?? 0);
-      
-      const platformNetCommission = dbPlatformCommission.sub(dbReferralVoucherAmount);
-      const dbSafePlatformNet = Prisma.Decimal.max(0, platformNetCommission);
-
-      // 4. Extract Marketer 20% slice cleanly directly from the Net Platform Pool
-      const dbMarketerCommission = marketerId 
-        ? dbSafePlatformNet.mul(new Prisma.Decimal('0.20')) 
-        : new Prisma.Decimal(0);
+        // --- AIRTIGHT DECIMAL WATERFALL FLOW ---
+        const priceAtPurchase = new Prisma.Decimal(item.priceAtPurchase);
+        const quantity = new Prisma.Decimal(item.quantity);
         
-      // 5. Retained AVIORÈ platform profit
-      const dbAvioreCommission = dbSafePlatformNet.sub(dbMarketerCommission);
-      
-      // 6. Net Vendor balance payout calculation
-      const vendorBaseEarning = dbGross.sub(dbPlatformCommission);
-      const vendorNetEarning = vendorBaseEarning.sub(dbVendorCouponAmount);
-      const dbVendorNetEarning = Prisma.Decimal.max(0, vendorNetEarning);
+        // 1. Calculate Gross Allocation for this specific line item
+        const dbGross = priceAtPurchase.mul(quantity);
+        
+        // 2. Platform Fee Pool (Strict 10% fee baseline)
+        const dbPlatformCommission = dbGross.mul(new Prisma.Decimal(String(this.COMMISSION_RATE))); 
+        
+        // 3. Deduct Vouchers and Discounts cleanly from the platform's cut
+        const dbVendorCouponAmount = new Prisma.Decimal(item.vendorCouponAmount ?? 0);
+        const dbReferralVoucherAmount = new Prisma.Decimal(item.referralVoucherAmount ?? 0);
+        
+        const platformNetCommission = dbPlatformCommission.sub(dbReferralVoucherAmount);
+        const dbSafePlatformNet = Prisma.Decimal.max(0, platformNetCommission);
 
-      // --- DATABASE INTEGRATION PHASE ---
+        // 4. DEFER MARKETING DISTRIBUTION SPLIT ENGINE
+        const dbMarketerCommission = await this.commissionLedgerService.processOrderItemCommissionSplitWithTx(
+          item.orderId,
+          item.id,
+          currentVendorId,
+          dbSafePlatformNet,
+          tx
+        );
+          
+        // 5. Retained AVIORÈ platform profit (Guarded against accidental negative platform bleed)
+        const avioreCommission = dbSafePlatformNet.sub(dbMarketerCommission);
+        const dbAvioreCommission = Prisma.Decimal.max(0, avioreCommission);
+        
+        // 6. Net Vendor balance payout calculation
+        const vendorBaseEarning = dbGross.sub(dbPlatformCommission);
+        const vendorNetEarning = vendorBaseEarning.sub(dbVendorCouponAmount);
+        const dbVendorNetEarning = Prisma.Decimal.max(0, vendorNetEarning);
 
-      // 1. Update line item metrics independently
-      await tx.orderItem.update({
-        where: { id: item.id },
-        data: {
-          commission: dbPlatformCommission.toNumber(),      // Float Column Compatibility
-          vendorEarning: dbVendorNetEarning.toNumber(),    // Float Column Compatibility
-          payoutStatus: 'LOCKED',
-          vendorId: currentVendorId,
-          retailAmount: dbGross,
-          customerPaid: dbGross,
-          vendorCouponDiscount: dbVendorCouponAmount, 
-          referralDiscount: dbReferralVoucherAmount, 
-          platformCommission: dbPlatformCommission, 
-          platformNetCommission: dbSafePlatformNet,
-          marketingCommission: dbMarketerCommission,
-        },
-      });
+        // --- DATABASE INTEGRATION PHASE ---
 
-      // 2. Increment escrow funds specifically for the designated item vendor wallet
-      await tx.vendorWallet.upsert({
-        where: { vendorId: currentVendorId },
-        update: {
-          pendingBalance: { increment: dbVendorNetEarning },
-          totalEarnings: { increment: dbVendorNetEarning },
-        },
-        create: {
-          vendorId: currentVendorId,
-          availableBalance: 0,
-          pendingBalance: dbVendorNetEarning,
-          totalEarnings: dbVendorNetEarning,
-        },
-      });
-
-      // 3. Credit the growth marketer's balance pool safely out of the platform fee
-      if (marketerId && dbMarketerCommission.greaterThan(0)) {
-        await tx.marketingWallet.upsert({
-          where: { marketerId },
-          update: {
-            balance: { increment: dbMarketerCommission },
-          },
-          create: {
-            marketerId,
-            balance: dbMarketerCommission,
-          },
-        });
-
-        // Log transaction history trail inside GrowthCommissionLog
-        await tx.growthCommissionLog.create({
+        // 1. Update line item metrics independently
+        await tx.orderItem.update({
+          where: { id: item.id },
           data: {
-            orderId: item.orderId,
-            orderItemId: item.id,
-            marketerId: marketerId, 
+            commission: dbPlatformCommission.toNumber(),      
+            vendorEarning: dbVendorNetEarning.toNumber(),    
+            payoutStatus: 'LOCKED',
             vendorId: currentVendorId,
-            
-            // Floats mapping:
-            grossOrderAmount: dbGross.toNumber(),
-            platformFeeRetained: dbPlatformCommission.toNumber(),
-            marketingSplitPaid: dbMarketerCommission.toNumber(),
-            vendorPayoutAmount: dbVendorNetEarning.toNumber(),
-            
-            // Decimals mapping:
             retailAmount: dbGross,
             customerPaid: dbGross,
-            vendorCouponDiscount: dbVendorCouponAmount,
-            referralDiscount: dbReferralVoucherAmount,
-            vendorPayout: dbVendorNetEarning,
-            platformGrossCommission: dbPlatformCommission,
+            vendorCouponDiscount: dbVendorCouponAmount, 
+            referralDiscount: dbReferralVoucherAmount, 
+            platformCommission: dbPlatformCommission, 
             platformNetCommission: dbSafePlatformNet,
-            marketerCommission: dbMarketerCommission,
-            avioreCommission: dbAvioreCommission,
-            
-            commissionType: 'ORGANIC',
+            marketingCommission: dbMarketerCommission,
           },
         });
-      }
 
-      this.logger.log(`
-🤝 MULTI-VENDOR SPLIT FIXED FOR AVIORÈ
+        // 2. Increment escrow funds specifically for the designated item vendor wallet
+        await tx.vendorWallet.upsert({
+          where: { vendorId: currentVendorId },
+          update: {
+            pendingBalance: { increment: dbVendorNetEarning },
+            totalEarnings: { increment: dbVendorNetEarning },
+          },
+          create: {
+            vendorId: currentVendorId,
+            availableBalance: 0,
+            pendingBalance: dbVendorNetEarning,
+            totalEarnings: dbVendorNetEarning,
+          },
+        });
+
+        // 3. Log comprehensive audit trail details inside GrowthCommissionLog
+        if (dbMarketerCommission.greaterThan(0)) {
+          const marketerId = product.vendor?.marketerId;
+          await tx.growthCommissionLog.create({
+            data: {
+              orderId: item.orderId,
+              orderItemId: item.id,
+              marketerId: marketerId!, 
+              vendorId: currentVendorId,
+              
+              grossOrderAmount: dbGross.toNumber(),
+              platformFeeRetained: dbPlatformCommission.toNumber(),
+              marketingSplitPaid: dbMarketerCommission.toNumber(),
+              vendorPayoutAmount: dbVendorNetEarning.toNumber(),
+              
+              retailAmount: dbGross,
+              customerPaid: dbGross,
+              vendorCouponDiscount: dbVendorCouponAmount,
+              referralDiscount: dbReferralVoucherAmount,
+              vendorPayout: dbVendorNetEarning,
+              platformGrossCommission: dbPlatformCommission,
+              platformNetCommission: dbSafePlatformNet,
+              marketerCommission: dbMarketerCommission,
+              avioreCommission: dbAvioreCommission,
+              
+              commissionType: 'ORGANIC',
+            },
+          });
+        }
+
+        this.logger.log(`
+🤝 MULTI-VENDOR SPLIT EXECUTED FOR AVIORÈ
 ITEM LINE NODE: ${item.id}
 VEND OWNER ID: ${currentVendorId}
-MARKETER INCENTIVE: ${marketerId ?? 'DIRECT ORGANIC'}
 MARKETER COMMISSION DEPOSITED: ₦${dbMarketerCommission.toFixed(2)}
 VENDOR ESCROW BALANCE CREDIT: ₦${dbVendorNetEarning.toFixed(2)}
 PLATFORM RETAINED AMOUNT: ₦${dbAvioreCommission.toFixed(2)}
-      `);
-    }
+        `);
+      })
+    );
   }
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
