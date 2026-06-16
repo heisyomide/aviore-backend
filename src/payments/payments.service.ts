@@ -7,7 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { OrderStatus, PaymentStatus, Prisma, Notification } from '@prisma/client';
+import { OrderStatus, PaymentStatus, Prisma } from '@prisma/client';
 import axios from 'axios';
 import { GrowthCommissionLedgerService } from '../growth/ledger/commission-ledger.service';
 import { randomUUID } from 'crypto';
@@ -22,7 +22,8 @@ export class PaymentsService implements OnModuleInit {
   
   private readonly COMMISSION_RATE = 0.1;
 
-  constructor(private readonly prisma: PrismaService, 
+  constructor(
+    private readonly prisma: PrismaService, 
     private readonly commissionLedgerService: GrowthCommissionLedgerService,
     private readonly notificationService: NotificationService,
   ) {}
@@ -94,15 +95,12 @@ export class PaymentsService implements OnModuleInit {
       throw new NotFoundException('ORDER_NOT_FOUND');
     }
 
-    // Support schema structures using camelCase or snake_case mappings safely
     const rawTotal = (order as any).totalAmount ?? (order as any).total;
     if (!rawTotal) {
       throw new BadRequestException('ORDER_AMOUNT_INVALID');
     }
 
-   const txRef =
-
-  `AVR-${randomUUID()}`
+    const txRef = `AVR-${randomUUID()}`;
 
     const payload = {
       tx_ref: txRef,
@@ -114,7 +112,7 @@ export class PaymentsService implements OnModuleInit {
         name: name || 'Valued Customer',
       },
       customizations: {
-        title: 'Pay Linkmart',
+        title: 'Pay AVIORÈ',
         description: `Payment for Order #${order.id.slice(-6).toUpperCase()}`,
       },
     };
@@ -161,7 +159,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // WEBHOOK GATEWAY RESOLVER
   // =====================================================
- async handleWebhook(signature: string, body: any) {
+  async handleWebhook(signature: string, body: any) {
     const secretHash = process.env.FLW_WEBHOOK_HASH;
     if (!signature || signature !== secretHash) {
       throw new BadRequestException('INVALID_SIGNATURE');
@@ -202,15 +200,13 @@ export class PaymentsService implements OnModuleInit {
         return { status: 'FAILED' };
       }
 
-      const expectedAmount = Number(
-        (payment.order as any).totalAmount ?? (payment.order as any).total,
-      );
+      const expectedAmount = Number((payment.order as any).totalAmount ?? (payment.order as any).total);
 
       if (Math.abs(paidAmount - expectedAmount) > 0.01) {
         throw new BadRequestException('PRICE_MISMATCH');
       }
 
-      // 1. Mark payment as completed
+      // 1. Mark payment record as COMPLETED
       await tx.payment.update({
         where: { id: payment.id },
         data: {
@@ -219,7 +215,7 @@ export class PaymentsService implements OnModuleInit {
         },
       });
 
-      // 2. Mark order ledger as PAID
+      // 2. Transmit PAID order transition status to database state
       await tx.order.update({
         where: { id: payment.orderId },
         data: {
@@ -228,38 +224,34 @@ export class PaymentsService implements OnModuleInit {
         },
       });
 
-      const customer =
-  await tx.user.findUnique({
-    where: {
-      id: payment.order.userId,
-    },
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-    },
-  });
+      const customer = await tx.user.findUnique({
+        where: { id: payment.order.userId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+        },
+      });
 
-if (customer) {
-  await this.notificationService.send({
-    userId: customer.id,
-    userEmail: customer.email,
-    title: 'Payment Confirmed',
-    message: `Your payment for Order #${payment.orderId.slice(-6)} has been received successfully.`,
-    category: 'orderUpdates',
-  });
-}
+      if (customer) {
+        await this.notificationService.send({
+          userId: customer.id,
+          userEmail: customer.email,
+          title: 'Payment Confirmed',
+          message: `Your payment for Order #${payment.orderId.slice(-6).toUpperCase()} has been received successfully.`,
+          category: 'orderUpdates',
+        });
+      }
 
-      // 3. Trigger atomic escrow settlement allocations and clean stock deductions
+      // 3. Process allocations across downstream internal metrics balances safely
       await this.settleOrderItems(tx, payment.order.items);
 
-      // 4. 💡 THE GROWTH COMMISSION ENGINE HOOK TRIGGER
-      // Passes the transactional context cleanly down the split loop pipeline
+      // 4. Trigger Growth Split Ledger Hook Execution Context
       await this.commissionLedgerService.processOrderCommissionSplitWithTx(
         payment.orderId,
         payment.order.vendorId ?? '',
         expectedAmount,
-        tx
+        tx,
       );
 
       return { status: 'SUCCESS' };
@@ -352,310 +344,130 @@ if (customer) {
     });
   }
 
- // =====================================================
+  // =====================================================
   // HIGH-PERFORMANCE ESCROW SPLIT ENGINE
   // =====================================================
-private async settleOrderItems(
-  tx: Prisma.TransactionClient,
-  items: any[],
-) {
-  if (!items?.length) return;
+  private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
+    if (!items?.length) return;
 
-  const productIds = items.map(
-    (item) => item.productId,
-  );
+    const productIds = items.map((item) => item.productId);
 
-const products = await tx.product.findMany({
-  where: {
-    id: {
-      in: productIds,
-    },
-  },
-
-  include: {
-    vendor: {
-      select: {
-        id: true,
-        marketerId: true,
-      },
-    },
-  },
-});
-  for (const item of items) {
-    const product = products.find(
-      (p) => p.id === item.productId,
-    );
-
-    if (!product) {
-      throw new NotFoundException(
-        `PRODUCT_NOT_FOUND: ${item.productId}`,
-      );
-    }
-
-    // ======================================
-    // GROSS ITEM VALUE
-    // ======================================
-
-    const gross =
-      Number(item.priceAtPurchase) *
-      Number(item.quantity);
-
-    // ======================================
-    // PLATFORM COMMISSION
-    // ALWAYS CALCULATED FROM
-    // ORIGINAL PRODUCT VALUE
-    // ======================================
-
- const platformCommission =
-  gross * this.COMMISSION_RATE;
-    // ======================================
-    // VENDOR BASE EARNING
-    // ======================================
-
-    const vendorBaseEarning =
-      gross - platformCommission;
-
-    // ======================================
-    // VENDOR COUPON COST
-    // VENDOR FUNDS THIS
-    // ======================================
-
-    const vendorCouponAmount =
-      Number(item.vendorCouponAmount ?? 0);
-
-    // ======================================
-    // REFERRAL COST
-    // PLATFORM FUNDS THIS
-    // ======================================
-
-    const referralVoucherAmount =
-      Number(item.referralVoucherAmount ?? 0);
-
-    // ======================================
-    // PLATFORM NET
-    // ======================================
-
-    const platformNetCommission =
-      platformCommission -
-      referralVoucherAmount;
-
-    // Safety
-
-    const safePlatformNet =
-      Math.max(
-        0,
-        platformNetCommission,
-      );
-
-    // ======================================
-    // MARKETER SHARE
-    // 20% OF PLATFORM NET
-    // ======================================
-
-    const marketerCommission =
-      safePlatformNet * 0.2;
-
-
-
-      
-
-    // ======================================
-    // AVIORE SHARE
-    // ======================================
-
-    const avioreCommission =
-      safePlatformNet -
-      marketerCommission;
-
-    // ======================================
-    // VENDOR NET
-    // ======================================
-
-const vendorNetEarning =
-  Math.max(
-    0,
-    vendorBaseEarning -
-      vendorCouponAmount,
-  );
-
-  
-
-    // ======================================
-    // SAVE ORDER ITEM
-    // ======================================
-
-await tx.orderItem.update({
-  where: {
-    id: item.id,
-  },
-  data: {
-    // 1. Core Financial Fields
-    commission: platformCommission, 
-    platformCommission: platformCommission, // Maps cleanly now
-    vendorEarning: vendorNetEarning,
-    payoutStatus: 'LOCKED',
-
-    // 2. Mapped Discounts (Fixed naming mismatches)
-    vendorCouponDiscount: vendorCouponAmount, // Maps variable to schema field
-    referralDiscount: referralVoucherAmount, // Maps variable to schema field
-
-    // 3. New Split Commissions (Now aligned with your schema changes)
-    platformNetCommission: safePlatformNet,
-    marketingCommission: marketerCommission,
-  },
-});
-    // ======================================
-    // CREDIT VENDOR WALLET
-    // ======================================
-
-    await tx.vendorWallet.upsert({
-      where: {
-        vendorId:
-          product.vendorId,
-      },
-
-      update: {
-        pendingBalance: {
-          increment:
-            vendorNetEarning,
-        },
-
-        totalEarnings: {
-          increment:
-            vendorNetEarning,
-        },
-      },
-
-      create: {
-        vendorId:
-          product.vendorId,
-
-        availableBalance: 0,
-
-        pendingBalance:
-          vendorNetEarning,
-
-        totalEarnings:
-          vendorNetEarning,
-      },
-    });
-
-    // ======================================
-    // MARKETER WALLET
-    // ======================================
-
-const marketerId =
-  product.vendor?.marketerId;
-
-if (
-  marketerCommission > 0 &&
-  marketerId
-) {
-  await tx.marketingWallet.upsert({
-    where: {
-      marketerId,
-    },
-
-    update: {
-      balance: {
-        increment:
-          marketerCommission,
-      },
-    },
-
-    create: {
-      marketerId,
-      balance:
-        marketerCommission,
-    },
-  });
-}
-
-if (
-  product.stock <
-  item.quantity
-) {
-  throw new BadRequestException(
-    `INSUFFICIENT_STOCK: ${product.id}`,
-  );
-}
-
-if (marketerId) {
-  await tx.growthCommissionLog.create({
-    data: {
-      orderId: item.orderId,
-      orderItemId: item.id,
-
-      marketerId,
-      vendorId: product.vendorId,
-
-      grossOrderAmount: gross,
-
-      retailAmount: gross,
-      customerPaid: gross,
-
-      vendorCouponDiscount: vendorCouponAmount,
-      referralDiscount: referralVoucherAmount,
-
-      vendorPayout: vendorNetEarning,
-      vendorPayoutAmount: vendorNetEarning,
-
-      platformFeeRetained: platformCommission,
-      platformGrossCommission: platformCommission,
-      platformNetCommission: safePlatformNet,
-
-      marketerCommission,
-      marketingSplitPaid: marketerCommission,
-
-      avioreCommission,
-
-      commissionType: 'ORGANIC',
-    },
-  });
-}
-
-    // ======================================
-    // PRODUCT STOCK
-    // ======================================
-
-    await tx.product.update({
-      where: {
-        id: product.id,
-      },
-
-      data: {
-        stock: {
-          decrement:
-            item.quantity,
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            marketerId: true,
+          },
         },
       },
     });
 
-    // ======================================
-    // AUDIT LOG
-    // ======================================
+    for (const item of items) {
+      const product = products.find((p) => p.id === item.productId);
 
-    this.logger.log(`
-SETTLEMENT COMPLETE
+      if (!product) {
+        throw new NotFoundException(`PRODUCT_NOT_FOUND: ${item.productId}`);
+      }
 
+      // Calculations and financial metrics
+      const gross = Number(item.priceAtPurchase) * Number(item.quantity);
+      const platformCommission = gross * this.COMMISSION_RATE;
+      const vendorBaseEarning = gross - platformCommission;
+
+      const vendorCouponAmount = Number(item.vendorCouponAmount ?? 0);
+      const referralVoucherAmount = Number(item.referralVoucherAmount ?? 0);
+      const platformNetCommission = platformCommission - referralVoucherAmount;
+      const safePlatformNet = Math.max(0, platformNetCommission);
+
+      const marketerCommission = safePlatformNet * 0.2;
+      const avioreCommission = safePlatformNet - marketerCommission;
+      const vendorNetEarning = Math.max(0, vendorBaseEarning - vendorCouponAmount);
+
+      // 1. UPDATE ORDER ITEM LEDGER STATS
+      await tx.orderItem.update({
+        where: { id: item.id },
+        data: {
+          commission: platformCommission, 
+          platformCommission: platformCommission, 
+          vendorEarning: vendorNetEarning,
+          payoutStatus: 'LOCKED',
+          vendorCouponDiscount: vendorCouponAmount, 
+          referralDiscount: referralVoucherAmount, 
+          platformNetCommission: safePlatformNet,
+          marketingCommission: marketerCommission,
+        },
+      });
+
+      // 2. CREDIT ESCROW TO VENDOR PENDING BALANCE
+      await tx.vendorWallet.upsert({
+        where: { vendorId: product.vendorId },
+        update: {
+          pendingBalance: { increment: vendorNetEarning },
+          totalEarnings: { increment: vendorNetEarning },
+        },
+        create: {
+          vendorId: product.vendorId,
+          availableBalance: 0,
+          pendingBalance: vendorNetEarning,
+          totalEarnings: vendorNetEarning,
+        },
+      });
+
+      // 3. CREDIT MARKETER COMMISSION DISTRIBUTION SPLITS
+      const marketerId = product.vendor?.marketerId;
+      if (marketerCommission > 0 && marketerId) {
+        await tx.marketingWallet.upsert({
+          where: { marketerId },
+          update: {
+            balance: { increment: marketerCommission },
+          },
+          create: {
+            marketerId,
+            balance: marketerCommission,
+          },
+        });
+
+        await tx.growthCommissionLog.create({
+          data: {
+            orderId: item.orderId,
+            orderItemId: item.id,
+            marketerId,
+            vendorId: product.vendorId,
+            grossOrderAmount: gross,
+            retailAmount: gross,
+            customerPaid: gross,
+            vendorCouponDiscount: vendorCouponAmount,
+            referralDiscount: referralVoucherAmount,
+            vendorPayout: vendorNetEarning,
+            vendorPayoutAmount: vendorNetEarning,
+            platformFeeRetained: platformCommission,
+            platformGrossCommission: platformCommission,
+            platformNetCommission: safePlatformNet,
+            marketerCommission,
+            marketingSplitPaid: marketerCommission,
+            avioreCommission,
+            commissionType: 'ORGANIC',
+          },
+        });
+      }
+
+      // NOTE: Stock deduction logic has been completely removed from here.
+      // It is safely handled within the initial OrdersService.create sequence.
+
+      this.logger.log(`
+SETTLEMENT LOG RECORDED FOR AVIORÈ
 ITEM: ${item.id}
-
-GROSS: ${gross}
-
-PLATFORM COMMISSION: ${platformCommission}
-
-REFERRAL COST: ${referralVoucherAmount}
-
-MARKETER: ${marketerCommission}
-
-AVIORE: ${avioreCommission}
-
-VENDOR COUPON: ${vendorCouponAmount}
-
-VENDOR NET: ${vendorNetEarning}
-`);
+GROSS AMOUNT: ₦${gross.toFixed(2)}
+PLATFORM GROSS: ₦${platformCommission.toFixed(2)}
+PLATFORM NET: ₦${safePlatformNet.toFixed(2)}
+MARKETER NET SHARE: ₦${marketerCommission.toFixed(2)}
+AVIORE APPORTIONMENT: ₦${avioreCommission.toFixed(2)}
+VENDOR NET PAYOUT: ₦${vendorNetEarning.toFixed(2)}
+      `);
+    }
   }
-}
 
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
@@ -674,8 +486,7 @@ VENDOR NET: ${vendorNetEarning}
       throw new NotFoundException('ORDER_NOT_FOUND');
     }
 
-    // ⚡ PREVENTING INVENTORY FABRICATION ANOMALIES:
-    // Only return stock if the current system state transitions cleanly out of PENDING.
+    // Return stock gracefully if the order drops from an uncompleted PENDING state
     if (order.status === OrderStatus.PENDING) {
       for (const item of order.items) {
         await tx.product.update({
@@ -696,15 +507,12 @@ VENDOR NET: ${vendorNetEarning}
       where: { id: orderId },
       data: { status: OrderStatus.CANCELLED },
     });
-  
 
-  await this.notificationService.send({
-  userId: order.userId,
-  title: 'Payment Failed',
-  message:
-    'Your payment could not be completed. Please try again.',
-  category: 'orderUpdates',
-});
-
-}
+    await this.notificationService.send({
+      userId: order.userId,
+      title: 'Payment Failed',
+      message: 'Your checkout session could not be completed. Please try again.',
+      category: 'orderUpdates',
+    });
+  }
 }
