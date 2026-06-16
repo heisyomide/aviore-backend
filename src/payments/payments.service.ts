@@ -469,11 +469,6 @@ VendorNetPayout: ₦${dbVendorNetEarning.toString()}
       // 🔴 DIAGNOSTIC LOG 4: Confirm wallet updates write out successfully
       this.logger.warn(`⚡ EXECUTING MARKETING WALLET UPSERT FOR MARKETER: ${marketerId}`);
 
-      await tx.marketingWallet.upsert({
-        where: { marketerId: marketerId },
-        update: { balance: { increment: dbMarketerCommission } },
-        create: { marketerId: marketerId, balance: dbMarketerCommission }
-      });
 
       await tx.growthCommissionLog.create({
         data: {
