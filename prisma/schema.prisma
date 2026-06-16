@@ -412,7 +412,7 @@ model Order {
   couponId             String?
   createdAt            DateTime             @default(now())
   dispute              Dispute?
-  growthCommissionLogs GrowthCommissionLog?
+  growthCommissionLogs  GrowthCommissionLog[]
   address              Address?             @relation(fields: [addressId], references: [id])
   Coupon               Coupon?              @relation(fields: [couponId], references: [id])
   user                 User                 @relation(fields: [userId], references: [id])
@@ -796,6 +796,7 @@ model MarketingWallet {
 
 model GrowthCommissionLog {
   id                       String   @id @default(uuid())
+  orderId                  String  
   marketerId               String
   vendorId                 String
   grossOrderAmount         Float
@@ -816,18 +817,17 @@ model GrowthCommissionLog {
   commissionType           String?  @default("ORGANIC")
   paymentGatewayReference  String?
   flutterwaveTransactionId String?
+  
   marketer                 Marketer @relation(fields: [marketerId], references: [id])
   order                    Order    @relation(fields: [orderId], references: [id])
   vendor                   Vendor   @relation(fields: [vendorId], references: [id])
 
-  @@index([vendorId])
-  @@index([marketerId])
+  // Cleaned up duplicate indices to optimize database lookups
   @@index([marketerId], map: "idx_growth_marketer")
   @@index([orderId], map: "idx_growth_order")
   @@index([orderItemId], map: "idx_growth_order_item")
   @@index([vendorId], map: "idx_growth_vendor")
 }
-
 model GrowthPayoutRequest {
   id              String             @id @default(uuid())
   marketerId      String
