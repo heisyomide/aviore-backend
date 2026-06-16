@@ -948,8 +948,8 @@ async updateOrderStatus(
   vendorId: string, 
   dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
 ) {
-  // 1. VERIFY OWNER ISOLATION & BATCH UPDATE AT THE ITEM LEVEL
-  // Only target order items that explicitly belong to this specific vendor
+  // 1. VERIFY OWNER ISOLATION & UPDATE ITEM STATE
+  // Update the financial/fulfillment tracking status at the individual item level
   const updateResult = await this.prisma.orderItem.updateMany({
     where: {
       orderId: orderId,
@@ -958,11 +958,9 @@ async updateOrderStatus(
       }
     },
     data: {
-      // Assuming your OrderItem schema has a status column. 
-      // If it's named something else (like deliveryStatus), match it here.
-      status: dto.status, 
-      ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
-      ...(dto.carrier && { carrier: dto.carrier }),
+      // Since your schema uses payoutStatus as its line item tracker, we flag it here.
+      // If the incoming status is COMPLETED, we move the item out of LOCKED phase.
+      ...(dto.status === 'COMPLETED' && { payoutStatus: 'SETTLED' }),
     }
   });
 
@@ -976,59 +974,54 @@ async updateOrderStatus(
   this.logger.log(`✅ Vendor ${vendorId} updated ${updateResult.count} line-item(s) to status: ${dto.status}`);
 
   // 2. CHECK IF ALL VENDORS IN THIS ORDER ARE DONE
-  // Count how many items in this entire order are still NOT completed
+  // Count how many items in this entire order are still "LOCKED" (meaning pending completion)
   const totalUncompletedItems = await this.prisma.orderItem.count({
     where: {
       orderId: orderId,
-      status: {
-        not: 'COMPLETED' // or OrderStatus.COMPLETED depending on your enum imports
-      }
+      payoutStatus: 'LOCKED' 
     }
   });
 
   let parentOrderStatus: OrderStatus = dto.status;
 
-  // If there are still items left to ship/deliver from other vendors, 
-  // the parent order should remain 'PARTIALLY_SHIPPED' or 'PROCESSING'
+  // If there are still items left to process from other vendors, 
+  // do not let this vendor pull down the whole order. Keep the parent order active.
   if (totalUncompletedItems > 0) {
-    parentOrderStatus = OrderStatus.PROCESSING; // Or a custom status like PARTIALLY_SHIPPED if you have it
-    this.logger.log(`📦 Parent Order ${orderId} remains in ${parentOrderStatus} because ${totalUncompletedItems} items are pending from other vendors.`);
+    parentOrderStatus = OrderStatus.PROCESSING; // Retain active lifecycle state
+    this.logger.log(`📦 Parent Order ${orderId} remains in PROCESSING because ${totalUncompletedItems} items are pending from other vendors.`);
   } else {
     parentOrderStatus = OrderStatus.COMPLETED;
-    this.logger.log(`🎉 All items inside Order ${orderId} are completed! Transitioning parent order status to COMPLETED.`);
+    this.logger.log(`🎉 All multi-vendor items inside Order ${orderId} are settled! Transitioning parent order status to COMPLETED.`);
   }
 
-  // 3. SAFELY UPDATE THE PARENT ORDER METRICS
+  // 3. SAFELY UPDATE THE PARENT ORDER Lifecycle Status
   const order = await this.prisma.order.update({
     where: { id: orderId },
     data: {
       status: parentOrderStatus,
-      // Store a summary tracking number on parent if desired, or leave tracking purely on items
       ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
       ...(dto.carrier && { carrier: dto.carrier }),
     },
     include: {
       user: true,
-      items: true // useful context for tracking
     },
   });
 
-  // 4. AUTO-TRIGGER ESCROW RELEASE *ONLY* FOR THIS VENDOR'S SHARES
+  // 4. AUTO-TRIGGER ESCROW RELEASE FOR THIS SPECIFIC VENDOR
   if (dto.status === 'COMPLETED' || (dto.status as any) === 'COMPLETED') {
     try {
       this.logger.log(`🔄 Auto-routing Order ${orderId} line-items to settlement engine for Vendor ${vendorId}`);
-      // Ensure this method is modified to only unlock funds for item lines matching this vendorId!
       await this.markOrderAsCompleted(orderId, vendorId); 
-} catch (settleError: unknown) {
-  const errorMessage = settleError instanceof Error ? settleError.message : String(settleError);
-  this.logger.error(`SETTLEMENT_AUTORUN_FAILED for Vendor ${vendorId}: ${errorMessage}`);
-}
+    } catch (settleError: unknown) {
+      const errorMessage = settleError instanceof Error ? settleError.message : String(settleError);
+      this.logger.error(`SETTLEMENT_AUTORUN_FAILED for Vendor ${vendorId}: ${errorMessage}`);
+    }
   }
 
-  // 5. DISPATCH IN-APP & EMAIL NOTIFICATION SAFELY
+  // 5. DISPATCH CUSTOMIZED USER NOTIFICATIONS
   try {
     const messageText = totalUncompletedItems > 0
-      ? `A portion of your order has been updated to ${dto.status} by the vendor.`
+      ? `A portion of your order has been marked as shipped/completed by the vendor.`
       : `Your entire order has been fully completed and delivered!`;
 
     await this.notificationService.send({
@@ -1038,8 +1031,9 @@ async updateOrderStatus(
       message: messageText, 
       category: 'orderUpdates',
     });
-  } catch (notifyError) {
-    this.logger.error(`NOTIFICATION_DISPATCH_FAILED: ${(notifyError as Error).message}`);
+  } catch (notifyError: unknown) {
+    const errorMessage = notifyError instanceof Error ? notifyError.message : String(notifyError);
+    this.logger.error(`NOTIFICATION_DISPATCH_FAILED: ${errorMessage}`);
   }
 
   return order;
