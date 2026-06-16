@@ -796,7 +796,6 @@ model MarketingWallet {
 
 model GrowthCommissionLog {
   id                       String   @id @default(uuid())
-  orderId                  String   @unique
   marketerId               String
   vendorId                 String
   grossOrderAmount         Float
@@ -804,7 +803,7 @@ model GrowthCommissionLog {
   marketingSplitPaid       Float
   vendorPayoutAmount       Float
   createdAt                DateTime @default(now())
-  orderItemId              String?
+  orderItemId              String?  @unique
   retailAmount             Decimal? @default(0) @db.Decimal(12, 2)
   vendorCouponDiscount     Decimal? @default(0) @db.Decimal(12, 2)
   referralDiscount         Decimal? @default(0) @db.Decimal(12, 2)

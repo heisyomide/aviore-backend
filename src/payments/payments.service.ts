@@ -455,6 +455,10 @@ const products = await tx.product.findMany({
     const marketerCommission =
       safePlatformNet * 0.2;
 
+
+
+      
+
     // ======================================
     // AVIORE SHARE
     // ======================================
@@ -473,6 +477,8 @@ const vendorNetEarning =
     vendorBaseEarning -
       vendorCouponAmount,
   );
+
+  
 
     // ======================================
     // SAVE ORDER ITEM
@@ -572,6 +578,40 @@ if (
   throw new BadRequestException(
     `INSUFFICIENT_STOCK: ${product.id}`,
   );
+}
+
+if (marketerId) {
+  await tx.growthCommissionLog.create({
+    data: {
+      orderId: item.orderId,
+      orderItemId: item.id,
+
+      marketerId,
+      vendorId: product.vendorId,
+
+      grossOrderAmount: gross,
+
+      retailAmount: gross,
+      customerPaid: gross,
+
+      vendorCouponDiscount: vendorCouponAmount,
+      referralDiscount: referralVoucherAmount,
+
+      vendorPayout: vendorNetEarning,
+      vendorPayoutAmount: vendorNetEarning,
+
+      platformFeeRetained: platformCommission,
+      platformGrossCommission: platformCommission,
+      platformNetCommission: safePlatformNet,
+
+      marketerCommission,
+      marketingSplitPaid: marketerCommission,
+
+      avioreCommission,
+
+      commissionType: 'ORGANIC',
+    },
+  });
 }
 
     // ======================================

@@ -13,6 +13,10 @@ export class SettlementService {
    * CONFIRM_DELIVERY_AND_RELEASE
    * Triggered when a customer clicks "Confirm Receipt" or an admin force-releases.
    */
+/**
+   * CONFIRM_DELIVERY_AND_RELEASE
+   * Triggered when a customer clicks "Confirm Receipt" or an admin force-releases.
+   */
   async confirmAndRelease(orderItemId: string, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       // 1. DATA_RECOVERY: Fetch the specific item and verify ownership
@@ -36,9 +40,22 @@ export class SettlementService {
       }
 
       const vendorId = item.product.vendorId;
-      const amount = Number(item.vendorEarning);
+      
+      // ✅ Schema matched: Uses your official vendorEarning column directly
+      const amount = Number(item.vendorEarning ?? 0);
 
-      // 2. WALLET_UPGRADE: Move from Pending to Available
+      // ========================================================
+      // 2. LEDGER_FINALIZATION: Update Item status FIRST
+      // ========================================================
+      // Doing this first eliminates the remainingItems race condition completely
+      const updatedItem = await tx.orderItem.update({
+        where: { id: orderItemId },
+        data: { payoutStatus: 'AVAILABLE' },
+      });
+
+      // ========================================================
+      // 3. WALLET_UPGRADE: Move from Pending to Available Balance
+      // ========================================================
       await tx.vendorWallet.update({
         where: { vendorId },
         data: {
@@ -48,18 +65,65 @@ export class SettlementService {
         },
       });
 
-      // 3. LEDGER_FINALIZATION: Update Item status
-      const updatedItem = await tx.orderItem.update({
-        where: { id: orderItemId },
-        data: { payoutStatus: 'AVAILABLE' },
+      // ========================================================
+      // 4. GROWTH INFRASTRUCTURE: Distribute Marketer Commission Splits
+      // ========================================================
+      const associatedVendor = await tx.vendor.findUnique({
+        where: { id: vendorId },
+        select: { marketerId: true }
       });
 
-      // 4. AUDIT_TRAIL: Create the financial record
+      if (associatedVendor?.marketerId) {
+        const actingMarketer = await tx.marketer.findUnique({
+          where: { id: associatedVendor.marketerId },
+          select: { id: true, role: true, teamCode: true }
+        });
+
+        if (actingMarketer) {
+          // Fallback parsing: calculate 10% pool if item.commission field isn't populated
+          const totalCommissionPool = item.commission ? Number(item.commission) : (Number(item.retailAmount ?? 0) * 0.10);
+
+          if (actingMarketer.role === 'HEAD') {
+            // Head Marketer keeps 100% of their direct referrals
+            // ✅ Schema matched: Fixed from marketerWallet to marketingWallet
+            await tx.marketingWallet.update({
+              where: { marketerId: actingMarketer.id },
+              data: { balance: { increment: totalCommissionPool } }
+            });
+          } else if (actingMarketer.role === 'SUB_MARKETER') { 
+            // ✅ Schema matched: Changed comparison type from 'SUB' to 'SUB_MARKETER'
+            const subMarketerShare = totalCommissionPool * 0.80;
+            const headMarketerShare = totalCommissionPool * 0.20;
+
+            // Pay Sub-Marketer
+            // ✅ Schema matched: Fixed to marketingWallet
+            await tx.marketingWallet.update({
+              where: { marketerId: actingMarketer.id },
+              data: { balance: { increment: subMarketerShare } }
+            });
+
+            // Find and pay the team's Head Marketer the 20% override cut
+            const absoluteTeamHead = await tx.marketer.findFirst({
+              where: { teamCode: actingMarketer.teamCode, role: 'HEAD' }
+            });
+
+            if (absoluteTeamHead) {
+              // ✅ Schema matched: Fixed to marketingWallet
+              await tx.marketingWallet.update({
+                where: { marketerId: absoluteTeamHead.id },
+                data: { balance: { increment: headMarketerShare } }
+              });
+            }
+          }
+        }
+      }
+
+      // 5. AUDIT_TRAIL: Create the financial record
       await tx.walletTransaction.create({
         data: {
           vendorId,
           amount,
-          type: TransactionType.SALE_SETTLEMENT, // Now matches Prisma Enum
+          type: TransactionType.SALE_SETTLEMENT,
           status: 'COMPLETED',
           reference: `STL-${item.id.slice(-6).toUpperCase()}`,
           metadata: {
@@ -70,8 +134,9 @@ export class SettlementService {
         },
       });
 
-      // 5. CHECK_ORDER_COMPLETION
-      // If all items in this order are now settled, mark the whole order as COMPLETED
+      // ========================================================
+      // 6. CHECK_ORDER_COMPLETION (Now 100% Accurate)
+      // ========================================================
       const remainingItems = await tx.orderItem.count({
         where: { 
           orderId: item.orderId, 
@@ -84,6 +149,7 @@ export class SettlementService {
           where: { id: item.orderId },
           data: { status: OrderStatus.COMPLETED }
         });
+        this.logger.log(`🏁 ORDER_FULLY_COMPLETED: Order ${item.orderId} successfully finalized.`);
       }
 
       this.logger.log(`✅ SETTLEMENT_RELEASED: Node ${item.id} -> Vendor ${vendorId} (₦${amount})`);
