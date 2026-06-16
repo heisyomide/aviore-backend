@@ -948,13 +948,31 @@ async updateOrderStatus(
   vendorId: string, 
   dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
 ) {
+  // 1. VERIFY OWNER ISOLATION AT THE ITEM LEVEL
+  // Check if this vendor actually owns any products inside this order
+  const vendorItemsCount = await this.prisma.orderItem.count({
+    where: {
+      orderId: orderId,
+      product: {
+        vendorId: vendorId
+      }
+    }
+  });
+
+  if (vendorItemsCount === 0) {
+    throw new ForbiddenException(
+      'Order not found or access denied: You do not own any items in this registry.'
+    );
+  }
+
   let order;
 
   try {
+    // 2. UPDATE THE PARENT ORDER METRICS SAFELY
+    // We remove "vendorId" from the unique update clause since we already proved item ownership above!
     order = await this.prisma.order.update({
       where: {
         id: orderId,
-        vendorId, // Enforces strict tenant ownership isolation
       },
       data: {
         status: dto.status,
@@ -970,30 +988,36 @@ async updateOrderStatus(
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2025'
     ) {
-      throw new ForbiddenException(
-        'Order not found or access denied'
-      );
+      throw new NotFoundException('Order registry node not found');
     }
     
-    // Log the true structural error if something else breaks in the DB layer
     this.logger.error(`DB_ORDER_STATUS_UPDATE_FAILED: ${(error as Error).message}`);
-    throw new InternalServerErrorException(
-      'Could not update order status'
-    );
+    throw new InternalServerErrorException('Could not update order status');
   }
 
-  // Dispatch notice safely outside the core write execution block
-  try {
-    await this.notificationService.send({
-      userId: order.userId,
-      userEmail: order.user.email,
-      title: 'Order Updated',
-      message: `Your order status has been updated to ${dto.status}.`, // 🛠️ Fixed reference
-      category: 'orderUpdates',
-    });
-  } catch (notifyError) {
-    // Log notification faults without killing an otherwise successful state change
-    this.logger.error(`NOTIFICATION_DISPATCH_FAILED_ON_STATUS_CHANGE: ${(notifyError as Error).message}`);
+  // 3. AUTO-TRIGGER ESCROW RELEASE IF MARKED AS DELIVERED/COMPLETED
+  // If the status is changing to COMPLETED, kick off the split-wallet settlement engine immediately
+  if (dto.status === 'COMPLETED' || (dto.status as any) === 'COMPLETED') {
+    try {
+      this.logger.log(`🔄 Auto-routing Order ${orderId} to settlement engine for Vendor ${vendorId}`);
+      await this.markOrderAsCompleted(orderId, vendorId);
+    } catch (settleError) {
+      this.logger.error(`SETTLEMENT_AUTORUN_FAILED: ${settleError.message}`);
+      // Don't crash the request if the wallet logging has a minor hiccup, but log it clearly
+    }
+  } else {
+    // 4. DISPATCH IN-APP & EMAIL NOTIFICATION SAFELY
+    try {
+      await this.notificationService.send({
+        userId: order.userId,
+        userEmail: order.user.email,
+        title: 'Order Updated',
+        message: `Your order status has been updated to ${dto.status}.`, 
+        category: 'orderUpdates',
+      });
+    } catch (notifyError) {
+      this.logger.error(`NOTIFICATION_DISPATCH_FAILED_ON_STATUS_CHANGE: ${(notifyError as Error).message}`);
+    }
   }
 
   return order;
