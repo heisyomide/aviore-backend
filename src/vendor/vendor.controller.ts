@@ -62,11 +62,23 @@ async getStats(@Req() req) {
     // req.user.vendorId comes from your VendorInterceptor
     return this.vendorService.createProduct(req.user.vendorId, dto, file);
   }
-  @Get('orders')
+@Get('orders')
   @Roles('VENDOR')
   async getMyOrders(@Req() req) {
+    const vendorId = req.user.vendorId;
+
+    if (!vendorId) {
+      throw new BadRequestException('Action denied. Valid vendor identity node required.');
+    }
+
     return this.prisma.order.findMany({
-      where: { vendorId: req.user.vendorId },
+      where: {
+        items: {
+          some: {
+            vendorId: vendorId, // ✅ Safely fetch the order if this vendor has a stake in it
+          },
+        },
+      },
       include: { 
         user: { 
           select: { 
@@ -74,7 +86,23 @@ async getStats(@Req() req) {
             firstName: true,
             lastName: true
           } 
-        } 
+        },
+        items: {
+          where: {
+            vendorId: vendorId, // 🛑 CRITICAL DATA PROTECTION: Only include this vendor's line items!
+          },
+          include: {
+            product: {
+              select: {
+                title: true,
+                images: {
+                  select: { imageUrl: true },
+                  take: 1
+                }
+              }
+            }
+          }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });

@@ -912,51 +912,31 @@ async findPublicVendors(params: {
 // src/vendor/vendor.service.ts
 
 async getOrderDetails(orderId: string, vendorId: string) {
-  // 1. Fetch the order but ensure it contains at least one item belonging to this vendor
-  const order = await this.prisma.order.findFirst({
-    where: {
-      id: orderId,
-      items: {
-        some: {
-          vendorId: vendorId, // Confirms this vendor actually has a stake in this order
-        },
-      },
-    },
+  return this.prisma.order.findFirst({
+    where: { id: orderId, vendorId },
     include: {
       user: {
-        select: { 
-          firstName: true, 
-          lastName: true, 
-          email: true 
-        },
+        select: { firstName: true, lastName: true, email: true }
       },
       items: {
-        where: {
-          vendorId: vendorId, // 🛑 CRITICAL: Filter out items belonging to other vendors!
-        },
         include: {
           product: {
             select: { 
               title: true, 
               images: {
                 select: { 
-                  imageUrl: true 
+                  imageUrl: true // <--- Changed from 'url' to 'imageUrl'
                 },
-                take: 1,
-              },
-            },
-          },
-        },
-      },
-    },
+                take: 1
+              }
+            }
+          }
+        }
+      }
+    }
   });
-
-  if (!order) {
-    throw new NotFoundException('ORDER_NOT_FOUND_OR_UNAUTHORIZED');
-  }
-
-  return order;
 }
+  
 
 
 // src/vendor/vendor.service.ts

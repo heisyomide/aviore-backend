@@ -8,7 +8,7 @@ import { Resend } from 'resend';
 import { PaymentsService } from '../payments/payments.service';
 import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
 import { GrowthVendorsActivationService } from 'src/growth/vendors/vendors-activation.service';
-import { NotificationService } from 'src/notification/notification.service';
+import { NotificationService } from '../notification/notification.service';
 
 
 

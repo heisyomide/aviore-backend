@@ -20,8 +20,7 @@ export class PaymentsService implements OnModuleInit {
   private flw: any;
   private readonly logger = new Logger(PaymentsService.name);
   
-  // Enforce rigid Decimal configuration constants
-  private readonly COMMISSION_RATE = new Prisma.Decimal('0.10');
+  private readonly COMMISSION_RATE = 0.1;
 
   constructor(
     private readonly prisma: PrismaService, 
@@ -160,7 +159,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // WEBHOOK GATEWAY RESOLVER
   // =====================================================
-  async handleWebhook(signature: string, body: any) {
+async handleWebhook(signature: string, body: any) {
     const secretHash = process.env.FLW_WEBHOOK_HASH;
     if (!signature || signature !== secretHash) {
       throw new BadRequestException('INVALID_SIGNATURE');
@@ -173,7 +172,7 @@ export class PaymentsService implements OnModuleInit {
 
     const txRef = payload.tx_ref;
     const flwId = payload.id;
-    const paidAmount = new Prisma.Decimal(payload.amount);
+    const paidAmount = Number(payload.amount);
     const status = String(payload.status).toLowerCase();
 
     return this.prisma.$transaction(async (tx) => {
@@ -192,7 +191,6 @@ export class PaymentsService implements OnModuleInit {
         throw new NotFoundException('PAYMENT_NOT_FOUND');
       }
 
-      // Idempotency check: Exit immediately if payment is already marked successful
       if (payment.status === PaymentStatus.SUCCESSFUL) {
         return { status: 'IGNORED' };
       }
@@ -202,16 +200,13 @@ export class PaymentsService implements OnModuleInit {
         return { status: 'FAILED' };
       }
 
-      const expectedAmount = new Prisma.Decimal(
-        (payment.order as any).totalAmount ?? (payment.order as any).total
-      );
+      const expectedAmount = Number((payment.order as any).totalAmount ?? (payment.order as any).total);
 
-      // Precision delta validation
-      if (paidAmount.sub(expectedAmount).abs().greaterThan(0.01)) {
+      if (Math.abs(paidAmount - expectedAmount) > 0.01) {
         throw new BadRequestException('PRICE_MISMATCH');
       }
 
-      // 1. Mutate local payment record state
+      // 1. Mark payment record as COMPLETED
       await tx.payment.update({
         where: { id: payment.id },
         data: {
@@ -220,7 +215,7 @@ export class PaymentsService implements OnModuleInit {
         },
       });
 
-      // 2. Advance parent order state
+      // 2. Transmit PAID order transition status to database state
       await tx.order.update({
         where: { id: payment.orderId },
         data: {
@@ -229,10 +224,31 @@ export class PaymentsService implements OnModuleInit {
         },
       });
 
-      // 3. Process allocations across wallets and item records with decimal calculations
+      const customer = await tx.user.findUnique({
+        where: { id: payment.order.userId },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+        },
+      });
+
+      if (customer) {
+        await this.notificationService.send({
+          userId: customer.id,
+          userEmail: customer.email,
+          title: 'Payment Confirmed',
+          message: `Your payment for Order #${payment.orderId.slice(-6).toUpperCase()} has been received successfully.`,
+          category: 'orderUpdates',
+        });
+      }
+
+      // 3. Process allocations across downstream internal metrics balances safely
+      // (This updates order items, credits vendor wallets, and logs marketer distributions)
       await this.settleOrderItems(tx, payment.order.items);
 
-      // 4. MULTI-VENDOR COMMISSION ALLOCATION AGGREGATION
+      // 4. FIX MULTI-VENDOR LEDGER SPLIT (LAUNCH EMERGENCY PATCH)
+      // Extracts product mappings dynamically to figure out true vendor ownership per cart group item
       const productIds = payment.order.items.map((i) => i.productId).filter(Boolean);
       const productsContext = await tx.product.findMany({
         where: { id: { in: productIds } },
@@ -245,55 +261,31 @@ export class PaymentsService implements OnModuleInit {
         const itemProduct = productsContext.find((p) => p.id === item.productId);
         const currentVendorId = itemProduct?.vendorId;
 
+        // If the item has a valid vendor and we haven't calculated splits for this vendor yet...
         if (currentVendorId && !processedVendors.has(currentVendorId)) {
           processedVendors.add(currentVendorId);
 
-          // Sum up vendor specific total volume using precise decimal math
+          // Sum up only the financial share this specific vendor introduced to this group cart session
           const vendorTotalShareVolume = payment.order.items
             .filter((i) => {
               const matchedProduct = productsContext.find((p) => p.id === i.productId);
               return matchedProduct?.vendorId === currentVendorId;
             })
-            .reduce((sum, i) => {
-              const price = new Prisma.Decimal(i.priceAtPurchase);
-              const qty = new Prisma.Decimal(i.quantity);
-              return sum.add(price.mul(qty));
-            }, new Prisma.Decimal(0));
+            .reduce((sum, i) => sum + (Number(i.priceAtPurchase) * Number(i.quantity)), 0);
 
-          // Run multi-vendor split engine externally away from inside line-item logic
+          // Safely execute commission calculations scoped EXCLUSIVELY to their specific share of the volume
           await this.commissionLedgerService.processOrderCommissionSplitWithTx(
             payment.orderId,
             currentVendorId, 
-            vendorTotalShareVolume.toNumber(),
+            vendorTotalShareVolume, 
             tx,
           );
-        }
-      }
-
-      // 5. DISPATCH TELEMTRY NOTIFICATION SANS LOCK BLOCKING
-      const customer = await tx.user.findUnique({
-        where: { id: payment.order.userId },
-        select: { id: true, email: true },
-      });
-
-      if (customer) {
-        try {
-          await this.notificationService.send({
-            userId: customer.id,
-            userEmail: customer.email,
-            title: 'Payment Confirmed',
-            message: `Your payment for Order #${payment.orderId.slice(-6).toUpperCase()} has been received successfully.`,
-            category: 'orderUpdates',
-          });
-        } catch (err) {
-          this.logger.error(`NOTIFY_EMIT_FAILED: ${err.message}`);
         }
       }
 
       return { status: 'SUCCESS' };
     });
   }
-
   // =====================================================
   // TRANSFER WEBHOOK MANAGEMENT
   // =====================================================
@@ -323,11 +315,6 @@ export class PaymentsService implements OnModuleInit {
 
       if (!withdrawal) {
         throw new NotFoundException('WITHDRAWAL_NOT_FOUND');
-      }
-
-      // Defend against running reversal increments twice
-      if (['COMPLETED', 'FAILED'].includes(withdrawal.status)) {
-        return { status: 'IGNORED' };
       }
 
       if (['successful', 'success', 'completed'].includes(transferStatus)) {
@@ -385,71 +372,97 @@ export class PaymentsService implements OnModuleInit {
     });
   }
 
-  // =====================================================
-  // HIGH-PERFORMANCE ESCROW SPLIT ENGINE
+
+// =====================================================
+  // HIGH-PERFORMANCE ESCROW SPLIT ENGINE - MULTI-VENDOR SECURE
   // =====================================================
   private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
     if (!items?.length) return;
 
+    // Standardize product references out of incoming items array safely
     const productIds = items.map((item) => item.productId).filter(Boolean);
 
-    // Optimized batch fetch including vendor and marketer information
     const products = await tx.product.findMany({
       where: { id: { in: productIds } },
       include: {
         vendor: {
-          select: { id: true, marketerId: true },
+          select: {
+            id: true,
+            marketerId: true,
+          },
         },
       },
     });
 
     for (const item of items) {
+      // Find the direct database product context tracking this specific ledger node
       const product = products.find((p) => p.id === item.productId);
 
       if (!product || !product.vendorId) {
+        this.logger.error(`CRITICAL: Product context or Vendor link missing for Product ID: ${item.productId}`);
         throw new NotFoundException(`PRODUCT_NOT_FOUND_OR_VENDOR_UNLINKED: ${item.productId}`);
       }
 
+      // Track the accurate current item vendor explicitly
       const currentVendorId = product.vendorId;
-      const marketerId = product.vendor?.marketerId ?? null;
 
-      // Rigid calculation pipeline using Decimal types exclusively
-      const itemPrice = new Prisma.Decimal(item.priceAtPurchase);
-      const itemQty = new Prisma.Decimal(item.quantity);
+      // 🛑 AIRTIGHT FAILSAFE MARKETER ID RESOLVER (TypeScript Error Patched)
+      let marketerId: string | null = null;
+      const primaryMarketerId = product.vendor?.marketerId;
       
-      const gross = itemPrice.mul(itemQty);
-      const platformCommission = gross.mul(this.COMMISSION_RATE);
-      const vendorBaseEarning = gross.sub(platformCommission);
+      if (primaryMarketerId) {
+        marketerId = primaryMarketerId;
+      } else {
+        const fallbackVendor = await tx.vendor.findUnique({
+          where: { id: currentVendorId },
+          select: { marketerId: true }
+        });
+        marketerId = fallbackVendor?.marketerId ?? null;
+      }
 
-      const vendorCouponAmount = new Prisma.Decimal(item.vendorCouponAmount ?? 0);
-      const referralVoucherAmount = new Prisma.Decimal(item.referralVoucherAmount ?? 0);
-      
-      const platformNetCommission = platformCommission.sub(referralVoucherAmount);
-      const safePlatformNet = Prisma.Decimal.max(0, platformNetCommission);
+      // Financial calculations per specific order line item node safely
+      const gross = Number(item.priceAtPurchase) * Number(item.quantity);
+      const platformCommission = gross * this.COMMISSION_RATE; // 10% pool -> e.g., ₦100
+      const vendorBaseEarning = gross - platformCommission;     // e.g., ₦900
 
-      const marketerCommission = safePlatformNet.mul('0.20'); // 20% cut to marketer
-      const avioreCommission = safePlatformNet.sub(marketerCommission);
-      const vendorNetEarning = Prisma.Decimal.max(0, vendorBaseEarning.sub(vendorCouponAmount));
+      const vendorCouponAmount = Number(item.vendorCouponAmount ?? 0);
+      const referralVoucherAmount = Number(item.referralVoucherAmount ?? 0);
+      const platformNetCommission = platformCommission - referralVoucherAmount;
+      const safePlatformNet = Math.max(0, platformNetCommission);
 
-      // 1. Update order item line metrics
+      const marketerCommission = safePlatformNet * 0.2; // 20% of net platform share goes to marketer
+      const avioreCommission = safePlatformNet - marketerCommission;
+      const vendorNetEarning = Math.max(0, vendorBaseEarning - vendorCouponAmount);
+
+      // Convert metrics to official database Decimal instances to maintain column compatibility
+      const dbGross = new Prisma.Decimal(gross);
+      const dbPlatformCommission = new Prisma.Decimal(platformCommission);
+      const dbVendorNetEarning = new Prisma.Decimal(vendorNetEarning);
+      const dbVendorCouponAmount = new Prisma.Decimal(vendorCouponAmount);
+      const dbReferralVoucherAmount = new Prisma.Decimal(referralVoucherAmount);
+      const dbSafePlatformNet = new Prisma.Decimal(safePlatformNet);
+      const dbMarketerCommission = new Prisma.Decimal(marketerCommission);
+      const dbAvioreCommission = new Prisma.Decimal(avioreCommission);
+
+      // 1. UPDATE LINE ITEM STATE INDEPENDENTLY
       await tx.orderItem.update({
         where: { id: item.id },
         data: {
-          commission: platformCommission.toNumber(), 
-          vendorEarning: vendorNetEarning.toNumber(), 
+          commission: platformCommission, // Float Column
+          vendorEarning: vendorNetEarning, // Float Column
           payoutStatus: 'LOCKED',
-          vendorId: currentVendorId,
-          retailAmount: gross,
-          customerPaid: gross,
-          vendorCouponDiscount: vendorCouponAmount, 
-          referralDiscount: referralVoucherAmount, 
-          platformCommission: platformCommission, 
-          platformNetCommission: safePlatformNet,
-          marketingCommission: marketerCommission,
+          vendorId: currentVendorId, // Force-bind item vendor context straight to row line
+          retailAmount: dbGross,
+          customerPaid: dbGross,
+          vendorCouponDiscount: dbVendorCouponAmount, 
+          referralDiscount: dbReferralVoucherAmount, 
+          platformCommission: dbPlatformCommission, 
+          platformNetCommission: dbSafePlatformNet,
+          marketingCommission: dbMarketerCommission,
         },
       });
 
-      // 2. Increment escrow balances safely
+      // 2. ESCROW IS CREDITED TO THE TRUE VENDOR RESPONSIBLE FOR THE PRODUCT
       await tx.vendorWallet.upsert({
         where: { vendorId: currentVendorId },
         update: {
@@ -464,9 +477,9 @@ export class PaymentsService implements OnModuleInit {
         },
       });
 
-      // 3. Handle separate growth marketer balances and track split telemetry
+      // 3. SEPARATE ACCURATE MARKETER ACCOUNT ALLOCATIONS
       if (marketerId) {
-        if (marketerCommission.greaterThan(0)) {
+        if (marketerCommission > 0) {
           await tx.marketingWallet.upsert({
             where: { marketerId },
             update: {
@@ -479,6 +492,7 @@ export class PaymentsService implements OnModuleInit {
           });
         }
 
+        // Generate clean tracking history inside GrowthCommissionLog
         await tx.growthCommissionLog.create({
           data: {
             orderId: item.orderId,
@@ -486,30 +500,38 @@ export class PaymentsService implements OnModuleInit {
             marketerId: marketerId, 
             vendorId: currentVendorId,
             
-            grossOrderAmount: gross.toNumber(),
-            platformFeeRetained: platformCommission.toNumber(),
-            marketingSplitPaid: marketerCommission.toNumber(),
-            vendorPayoutAmount: vendorNetEarning.toNumber(),
+            // Floats mapping:
+            grossOrderAmount: gross,
+            platformFeeRetained: platformCommission,
+            marketingSplitPaid: marketerCommission,
+            vendorPayoutAmount: vendorNetEarning,
             
-            retailAmount: gross,
-            customerPaid: gross,
-            vendorCouponDiscount: vendorCouponAmount,
-            referralDiscount: referralVoucherAmount,
-            vendorPayout: vendorNetEarning,
-            platformGrossCommission: platformCommission,
-            platformNetCommission: safePlatformNet,
-            marketerCommission: marketerCommission,
-            avioreCommission: avioreCommission,
+            // Decimals mapping:
+            retailAmount: dbGross,
+            customerPaid: dbGross,
+            vendorCouponDiscount: dbVendorCouponAmount,
+            referralDiscount: dbReferralVoucherAmount,
+            vendorPayout: dbVendorNetEarning,
+            platformGrossCommission: dbPlatformCommission,
+            platformNetCommission: dbSafePlatformNet,
+            marketerCommission: dbMarketerCommission,
+            avioreCommission: dbAvioreCommission,
             
             commissionType: 'ORGANIC',
           },
         });
       }
 
-      this.logger.log(`[ESCROW LOCKED] Item: ${item.id} | Vendor: ${currentVendorId} | Amount: ₦${vendorNetEarning.toFixed(2)}`);
+      this.logger.log(`
+🤝 MULTI-VENDOR SPLIT RESOLVED FOR AVIORÈ
+ITEM LINE: ${item.id}
+CORRECT VENDOR ID: ${currentVendorId}
+MARKETER RESPONSIBLE: ${marketerId ?? 'DIRECT ORGANIC'}
+MARKETER SPLIT CASHED: ₦${marketerCommission.toFixed(2)}
+VENDOR ESCROW LOCKED: ₦${vendorNetEarning.toFixed(2)}
+      `);
     }
   }
-
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
   // =====================================================
@@ -518,15 +540,6 @@ export class PaymentsService implements OnModuleInit {
     paymentId: string,
     orderId: string,
   ) {
-    const paymentCheck = await tx.payment.findUnique({
-      where: { id: paymentId },
-    });
-
-    // Idempotency: Break early if this payment record was already updated to FAILED
-    if (!paymentCheck || paymentCheck.status === PaymentStatus.FAILED) {
-      return;
-    }
-
     const order = await tx.order.findUnique({
       where: { id: orderId },
       include: { items: true },
@@ -536,6 +549,7 @@ export class PaymentsService implements OnModuleInit {
       throw new NotFoundException('ORDER_NOT_FOUND');
     }
 
+    // Return stock gracefully if the order drops from an uncompleted PENDING state
     if (order.status === OrderStatus.PENDING) {
       for (const item of order.items) {
         await tx.product.update({
@@ -557,15 +571,11 @@ export class PaymentsService implements OnModuleInit {
       data: { status: OrderStatus.CANCELLED },
     });
 
-    try {
-      await this.notificationService.send({
-        userId: order.userId,
-        title: 'Payment Failed',
-        message: 'Your checkout session could not be completed. Please try again.',
-        category: 'orderUpdates',
-      });
-    } catch (err) {
-      this.logger.error(`FAILED_NOTIFICATION_FAILED: ${err.message}`);
-    }
+    await this.notificationService.send({
+      userId: order.userId,
+      title: 'Payment Failed',
+      message: 'Your checkout session could not be completed. Please try again.',
+      category: 'orderUpdates',
+    });
   }
 }
