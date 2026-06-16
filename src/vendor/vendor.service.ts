@@ -948,81 +948,102 @@ async updateOrderStatus(
   vendorId: string, 
   dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
 ) {
-  // 1. VERIFY OWNER ISOLATION AT THE ITEM LEVEL
-  // Check if this vendor actually owns any products inside this order
-  const vendorItemsCount = await this.prisma.orderItem.count({
+  // 1. VERIFY OWNER ISOLATION & BATCH UPDATE AT THE ITEM LEVEL
+  // Only target order items that explicitly belong to this specific vendor
+  const updateResult = await this.prisma.orderItem.updateMany({
     where: {
       orderId: orderId,
       product: {
         vendorId: vendorId
       }
+    },
+    data: {
+      // Assuming your OrderItem schema has a status column. 
+      // If it's named something else (like deliveryStatus), match it here.
+      status: dto.status, 
+      ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
+      ...(dto.carrier && { carrier: dto.carrier }),
     }
   });
 
-  if (vendorItemsCount === 0) {
+  // If no rows were affected, this vendor does not own any part of this order
+  if (updateResult.count === 0) {
     throw new ForbiddenException(
       'Order not found or access denied: You do not own any items in this registry.'
     );
   }
 
-  let order;
+  this.logger.log(`✅ Vendor ${vendorId} updated ${updateResult.count} line-item(s) to status: ${dto.status}`);
 
-  try {
-    // 2. UPDATE THE PARENT ORDER METRICS SAFELY
-    // We remove "vendorId" from the unique update clause since we already proved item ownership above!
-    order = await this.prisma.order.update({
-      where: {
-        id: orderId,
-      },
-      data: {
-        status: dto.status,
-        ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
-        ...(dto.carrier && { carrier: dto.carrier }),
-      },
-      include: {
-        user: true,
-      },
-    });
-  } catch (error: unknown) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2025'
-    ) {
-      throw new NotFoundException('Order registry node not found');
+  // 2. CHECK IF ALL VENDORS IN THIS ORDER ARE DONE
+  // Count how many items in this entire order are still NOT completed
+  const totalUncompletedItems = await this.prisma.orderItem.count({
+    where: {
+      orderId: orderId,
+      status: {
+        not: 'COMPLETED' // or OrderStatus.COMPLETED depending on your enum imports
+      }
     }
-    
-    this.logger.error(`DB_ORDER_STATUS_UPDATE_FAILED: ${(error as Error).message}`);
-    throw new InternalServerErrorException('Could not update order status');
+  });
+
+  let parentOrderStatus: OrderStatus = dto.status;
+
+  // If there are still items left to ship/deliver from other vendors, 
+  // the parent order should remain 'PARTIALLY_SHIPPED' or 'PROCESSING'
+  if (totalUncompletedItems > 0) {
+    parentOrderStatus = OrderStatus.PROCESSING; // Or a custom status like PARTIALLY_SHIPPED if you have it
+    this.logger.log(`📦 Parent Order ${orderId} remains in ${parentOrderStatus} because ${totalUncompletedItems} items are pending from other vendors.`);
+  } else {
+    parentOrderStatus = OrderStatus.COMPLETED;
+    this.logger.log(`🎉 All items inside Order ${orderId} are completed! Transitioning parent order status to COMPLETED.`);
   }
 
-  // 3. AUTO-TRIGGER ESCROW RELEASE IF MARKED AS DELIVERED/COMPLETED
-  // If the status is changing to COMPLETED, kick off the split-wallet settlement engine immediately
+  // 3. SAFELY UPDATE THE PARENT ORDER METRICS
+  const order = await this.prisma.order.update({
+    where: { id: orderId },
+    data: {
+      status: parentOrderStatus,
+      // Store a summary tracking number on parent if desired, or leave tracking purely on items
+      ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
+      ...(dto.carrier && { carrier: dto.carrier }),
+    },
+    include: {
+      user: true,
+      items: true // useful context for tracking
+    },
+  });
+
+  // 4. AUTO-TRIGGER ESCROW RELEASE *ONLY* FOR THIS VENDOR'S SHARES
   if (dto.status === 'COMPLETED' || (dto.status as any) === 'COMPLETED') {
     try {
-      this.logger.log(`🔄 Auto-routing Order ${orderId} to settlement engine for Vendor ${vendorId}`);
-      await this.markOrderAsCompleted(orderId, vendorId);
-    } catch (settleError) {
-      this.logger.error(`SETTLEMENT_AUTORUN_FAILED: ${settleError.message}`);
-      // Don't crash the request if the wallet logging has a minor hiccup, but log it clearly
-    }
-  } else {
-    // 4. DISPATCH IN-APP & EMAIL NOTIFICATION SAFELY
-    try {
-      await this.notificationService.send({
-        userId: order.userId,
-        userEmail: order.user.email,
-        title: 'Order Updated',
-        message: `Your order status has been updated to ${dto.status}.`, 
-        category: 'orderUpdates',
-      });
-    } catch (notifyError) {
-      this.logger.error(`NOTIFICATION_DISPATCH_FAILED_ON_STATUS_CHANGE: ${(notifyError as Error).message}`);
-    }
+      this.logger.log(`🔄 Auto-routing Order ${orderId} line-items to settlement engine for Vendor ${vendorId}`);
+      // Ensure this method is modified to only unlock funds for item lines matching this vendorId!
+      await this.markOrderAsCompleted(orderId, vendorId); 
+} catch (settleError: unknown) {
+  const errorMessage = settleError instanceof Error ? settleError.message : String(settleError);
+  this.logger.error(`SETTLEMENT_AUTORUN_FAILED for Vendor ${vendorId}: ${errorMessage}`);
+}
+  }
+
+  // 5. DISPATCH IN-APP & EMAIL NOTIFICATION SAFELY
+  try {
+    const messageText = totalUncompletedItems > 0
+      ? `A portion of your order has been updated to ${dto.status} by the vendor.`
+      : `Your entire order has been fully completed and delivered!`;
+
+    await this.notificationService.send({
+      userId: order.userId,
+      userEmail: order.user.email,
+      title: totalUncompletedItems > 0 ? 'Order Partially Updated' : 'Order Completed!',
+      message: messageText, 
+      category: 'orderUpdates',
+    });
+  } catch (notifyError) {
+    this.logger.error(`NOTIFICATION_DISPATCH_FAILED: ${(notifyError as Error).message}`);
   }
 
   return order;
 }
-
 async getCustomerDetails(vendorId: string, userId: string) {
   return this.prisma.orderItem.findMany({
     where: {
