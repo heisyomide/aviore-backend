@@ -347,6 +347,9 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // HIGH-PERFORMANCE ESCROW SPLIT ENGINE
   // =====================================================
+  // =====================================================
+  // HIGH-PERFORMANCE ESCROW SPLIT ENGINE
+  // =====================================================
   private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
     if (!items?.length) return;
 
@@ -371,9 +374,23 @@ export class PaymentsService implements OnModuleInit {
         throw new NotFoundException(`PRODUCT_NOT_FOUND: ${item.productId}`);
       }
 
-      // Calculations and financial metrics
+      // 🛑 AIRTIGHT FAILSAFE MARKETER ID RESOLVER (TypeScript Error Patched)
+      let marketerId: string | null = null;
+      
+      const primaryMarketerId = product.vendor?.marketerId;
+      if (primaryMarketerId) {
+        marketerId = primaryMarketerId;
+      } else if (product.vendorId) {
+        const fallbackVendor = await tx.vendor.findUnique({
+          where: { id: product.vendorId },
+          select: { marketerId: true }
+        });
+        marketerId = fallbackVendor?.marketerId ?? null;
+      }
+
+      // Financial calculations (Plain numbers for processing math accurately)
       const gross = Number(item.priceAtPurchase) * Number(item.quantity);
-      const platformCommission = gross * this.COMMISSION_RATE;
+      const platformCommission = gross * this.COMMISSION_RATE; // 10% pool
       const vendorBaseEarning = gross - platformCommission;
 
       const vendorCouponAmount = Number(item.vendorCouponAmount ?? 0);
@@ -381,22 +398,34 @@ export class PaymentsService implements OnModuleInit {
       const platformNetCommission = platformCommission - referralVoucherAmount;
       const safePlatformNet = Math.max(0, platformNetCommission);
 
-      const marketerCommission = safePlatformNet * 0.2;
+      const marketerCommission = safePlatformNet * 0.2; // 20% of net platform share
       const avioreCommission = safePlatformNet - marketerCommission;
       const vendorNetEarning = Math.max(0, vendorBaseEarning - vendorCouponAmount);
+
+      // Convert values to Prisma compatible instances to safely populate your schema layout
+      const dbGross = new Prisma.Decimal(gross);
+      const dbPlatformCommission = new Prisma.Decimal(platformCommission);
+      const dbVendorNetEarning = new Prisma.Decimal(vendorNetEarning);
+      const dbVendorCouponAmount = new Prisma.Decimal(vendorCouponAmount);
+      const dbReferralVoucherAmount = new Prisma.Decimal(referralVoucherAmount);
+      const dbSafePlatformNet = new Prisma.Decimal(safePlatformNet);
+      const dbMarketerCommission = new Prisma.Decimal(marketerCommission);
+      const dbAvioreCommission = new Prisma.Decimal(avioreCommission);
 
       // 1. UPDATE ORDER ITEM LEDGER STATS
       await tx.orderItem.update({
         where: { id: item.id },
         data: {
-          commission: platformCommission, 
-          platformCommission: platformCommission, 
-          vendorEarning: vendorNetEarning,
+          commission: platformCommission, // Float?
+          vendorEarning: vendorNetEarning, // Float?
           payoutStatus: 'LOCKED',
-          vendorCouponDiscount: vendorCouponAmount, 
-          referralDiscount: referralVoucherAmount, 
-          platformNetCommission: safePlatformNet,
-          marketingCommission: marketerCommission,
+          retailAmount: dbGross,
+          customerPaid: dbGross,
+          vendorCouponDiscount: dbVendorCouponAmount, 
+          referralDiscount: dbReferralVoucherAmount, 
+          platformCommission: dbPlatformCommission, 
+          platformNetCommission: dbSafePlatformNet,
+          marketingCommission: dbMarketerCommission,
         },
       });
 
@@ -416,59 +445,59 @@ export class PaymentsService implements OnModuleInit {
       });
 
       // 3. CREDIT MARKETER COMMISSION DISTRIBUTION SPLITS
-      const marketerId = product.vendor?.marketerId;
-      if (marketerCommission > 0 && marketerId) {
-        await tx.marketingWallet.upsert({
-          where: { marketerId },
-          update: {
-            balance: { increment: marketerCommission },
-          },
-          create: {
-            marketerId,
-            balance: marketerCommission,
-          },
-        });
+      if (marketerId) {
+        if (marketerCommission > 0) {
+          await tx.marketingWallet.upsert({
+            where: { marketerId },
+            update: {
+              balance: { increment: marketerCommission },
+            },
+            create: {
+              marketerId,
+              balance: marketerCommission,
+            },
+          });
+        }
 
+        // Writes the record to GrowthCommissionLog aligning with both Decimal and Float properties
         await tx.growthCommissionLog.create({
           data: {
             orderId: item.orderId,
             orderItemId: item.id,
-            marketerId,
+            marketerId: marketerId, // Strictly passes string, clearing the TS error
             vendorId: product.vendorId,
+            
+            // Floats in schema:
             grossOrderAmount: gross,
-            retailAmount: gross,
-            customerPaid: gross,
-            vendorCouponDiscount: vendorCouponAmount,
-            referralDiscount: referralVoucherAmount,
-            vendorPayout: vendorNetEarning,
-            vendorPayoutAmount: vendorNetEarning,
             platformFeeRetained: platformCommission,
-            platformGrossCommission: platformCommission,
-            platformNetCommission: safePlatformNet,
-            marketerCommission,
             marketingSplitPaid: marketerCommission,
-            avioreCommission,
+            vendorPayoutAmount: vendorNetEarning,
+            
+            // Decimals in schema:
+            retailAmount: dbGross,
+            customerPaid: dbGross,
+            vendorCouponDiscount: dbVendorCouponAmount,
+            referralDiscount: dbReferralVoucherAmount,
+            vendorPayout: dbVendorNetEarning,
+            platformGrossCommission: dbPlatformCommission,
+            platformNetCommission: dbSafePlatformNet,
+            marketerCommission: dbMarketerCommission,
+            avioreCommission: dbAvioreCommission,
+            
             commissionType: 'ORGANIC',
           },
         });
       }
 
-      // NOTE: Stock deduction logic has been completely removed from here.
-      // It is safely handled within the initial OrdersService.create sequence.
-
       this.logger.log(`
-SETTLEMENT LOG RECORDED FOR AVIORÈ
-ITEM: ${item.id}
-GROSS AMOUNT: ₦${gross.toFixed(2)}
-PLATFORM GROSS: ₦${platformCommission.toFixed(2)}
-PLATFORM NET: ₦${safePlatformNet.toFixed(2)}
-MARKETER NET SHARE: ₦${marketerCommission.toFixed(2)}
-AVIORE APPORTIONMENT: ₦${avioreCommission.toFixed(2)}
-VENDOR NET PAYOUT: ₦${vendorNetEarning.toFixed(2)}
+🤝 SETTLEMENT SPLIT PROCESSED SUCCESSFULLY FOR AVIORÈ
+ITEM ID: ${item.id}
+MARKETER ASSIGNED: ${marketerId ?? 'NONE'}
+MARKETER NET CASH SPLIT: ₦${marketerCommission.toFixed(2)}
+VENDOR NET CASH ESCROW: ₦${vendorNetEarning.toFixed(2)}
       `);
     }
   }
-
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
   // =====================================================
