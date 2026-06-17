@@ -47,7 +47,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // PAYOUT TRANSFER
   // =====================================================
-  async initiateTransfer(data: {
+async initiateTransfer(data: {
     amount: number;
     bankCode: string;
     accountNumber: string;
@@ -59,6 +59,8 @@ export class PaymentsService implements OnModuleInit {
     }
 
     try {
+      this.logger.log(`📡 Sending payload to Flutterwave SDK. Ref: ${data.reference}`);
+      
       const response = await this.flw.Transfer.initiate({
         account_bank: data.bankCode,
         account_number: data.accountNumber,
@@ -69,20 +71,35 @@ export class PaymentsService implements OnModuleInit {
         debit_currency: 'NGN',
       });
 
+      // 🔬 Monitor SDK outputs precisely 
+      this.logger.debug(`📥 Raw SDK Response: ${JSON.stringify(response)}`);
+
+      // Handle cases where API returns an error status instead of throwing an exception
+      if (response?.status === 'error' || response?.status === 'failed') {
+        const apiMessage = response?.message || 'Flutterwave gateway rejected the payload structure';
+        throw new Error(apiMessage);
+      }
+
+      // Map parameters directly from the SDK root object structure
       return {
-        id: response?.data?.id,
-        reference: response?.data?.reference,
-        status: response?.data?.status,
-        raw: response?.data,
+        id: response?.data?.id || response?.id,
+        reference: response?.data?.reference || response?.reference,
+        status: response?.data?.status || response?.status,
+        raw: response?.data || response,
       };
+
     } catch (error: any) {
-      this.logger.error(
-        `TRANSFER_FAILED: ${error?.response?.data?.message || error.message}`,
-      );
-      throw new InternalServerErrorException('TRANSFER_FAILED');
+      // Extract deeply nested validation messages from the gateway
+      const gatewayErrorMessage = 
+        error?.response?.data?.message || 
+        error?.message || 
+        'UNKNOWN_GATEWAY_ERROR';
+
+      this.logger.error(`❌ FLUTTERWAVE_SDK_TRANSFER_FAILED: ${gatewayErrorMessage}`);
+      
+      throw new InternalServerErrorException(`GATEWAY_REJECTION: ${gatewayErrorMessage}`);
     }
   }
-
   // =====================================================
   // PAYMENT INITIALIZATION
   // =====================================================
