@@ -1,10 +1,12 @@
 import {
 Body,
 Controller,
+Get,
 Post,
 } from '@nestjs/common';
 
 import { PaymentInitializerService } from '../services/payment-initializer.service';
+import axios from 'axios';
 
 @Controller('payments')
 export class PaymentsController {
@@ -26,5 +28,11 @@ body.orderId,
 body.email,
 body.name,
 );
+}
+
+@Get('server-ip')
+async getIp() {
+  const response = await axios.get('https://api.ipify.org?format=json');
+  return response.data;
 }
 }
