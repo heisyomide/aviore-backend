@@ -54,48 +54,57 @@ async initiateTransfer(data: {
     narration: string;
     reference: string;
   }) {
-    if (!this.flw) {
-      throw new InternalServerErrorException('FLUTTERWAVE_NOT_INITIALIZED');
-    }
-
     try {
-      this.logger.log(`📡 Sending payload to Flutterwave SDK. Ref: ${data.reference}`);
-      
-      const response = await this.flw.Transfer.initiate({
-        account_bank: data.bankCode,
-        account_number: data.accountNumber,
-        amount: data.amount,
-        narration: data.narration,
-        currency: 'NGN',
-        reference: data.reference,
-        debit_currency: 'NGN',
-      });
+      this.logger.log(`📡 Streaming payout through Cloudflare Tunnel. Ref: ${data.reference}`);
 
-      // 🔬 Monitor SDK outputs precisely 
-      this.logger.debug(`📥 Raw SDK Response: ${JSON.stringify(response)}`);
+      // Your live Cloudflare Worker URL
+      const cloudflareProxyUrl = 'https://rapid-tree-6d88.kofohaven.workers.dev';
 
-      // Handle cases where API returns an error status instead of throwing an exception
-      if (response?.status === 'error' || response?.status === 'failed') {
-        const apiMessage = response?.message || 'Flutterwave gateway rejected the payload structure';
-        throw new Error(apiMessage);
+      // We make a direct HTTP call to your secure Cloudflare Worker instead of using the SDK
+      const response = await axios.post(
+        cloudflareProxyUrl,
+        {
+          account_bank: data.bankCode,
+          account_number: data.accountNumber,
+          amount: data.amount,
+          narration: data.narration,
+          currency: 'NGN',
+          reference: data.reference,
+          debit_currency: 'NGN',
+        },
+        {
+          headers: {
+            // Your production secret key must be passed along for Flutterwave to authorize the transfer
+            Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      const result = response.data;
+      this.logger.debug(`📥 Tunnel Response Payload: ${JSON.stringify(result)}`);
+
+      // Handle custom error response structures from Flutterwave's gateway safely
+      if (result?.status === 'error' || result?.status === 'failed') {
+        throw new Error(result?.message || 'Flutterwave gateway rejected the transaction parameters');
       }
 
-      // Map parameters directly from the SDK root object structure
+      // Map parameters directly to match exactly what your settlement service engine expects
       return {
-        id: response?.data?.id || response?.id,
-        reference: response?.data?.reference || response?.reference,
-        status: response?.data?.status || response?.status,
-        raw: response?.data || response,
+        id: result?.data?.id || result?.id,
+        reference: result?.data?.reference || result?.reference,
+        status: result?.data?.status || result?.status,
+        raw: result?.data || result,
       };
 
     } catch (error: any) {
-      // Extract deeply nested validation messages from the gateway
+      // Extract the deepest validation error returned across the proxy line
       const gatewayErrorMessage = 
         error?.response?.data?.message || 
         error?.message || 
-        'UNKNOWN_GATEWAY_ERROR';
+        'UNKNOWN_TUNNEL_GATEWAY_ERROR';
 
-      this.logger.error(`❌ FLUTTERWAVE_SDK_TRANSFER_FAILED: ${gatewayErrorMessage}`);
+      this.logger.error(`❌ TUNNEL_PAYOUT_FAILED: ${gatewayErrorMessage}`);
       
       throw new InternalServerErrorException(`GATEWAY_REJECTION: ${gatewayErrorMessage}`);
     }
