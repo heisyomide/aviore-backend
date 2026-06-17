@@ -1190,135 +1190,137 @@ async getPendingWithdrawals() {
    * Authorize and Complete a Vendor Payout.
    * Utilizes a transaction to ensure status update and audit logs are atomic.
    */
-async approveWithdrawal(
-  id: string,
-  adminId: string,
-) {
-  return this.prisma.$transaction(
-    async (tx) => {
-const request =
-  await tx.withdrawalRequest.findUnique({
-    where: { id },
 
-    include: {
-      vendor: {
-        include: {
-          user: true,
+async approveWithdrawal(id: string, adminId: string) {
+  // PHASE 1: Atomic Database Verification and Lock State Transition
+  const request = await this.prisma.$transaction(async (tx) => {
+    const wRequest = await tx.withdrawalRequest.findUnique({
+      where: { id },
+      include: {
+        vendor: { include: { user: true } },
+      },
+    });
+
+    if (!wRequest) {
+      throw new NotFoundException(`Withdrawal ${id} not found`);
+    }
+    if (wRequest.status !== WithdrawalStatus.PENDING) {
+      throw new BadRequestException('WITHDRAWAL_ALREADY_PROCESSED');
+    }
+
+    const bankDetails = wRequest.bankDetails as {
+      bankCode: string;
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+    };
+
+    if (!bankDetails || !bankDetails.bankCode || !bankDetails.accountNumber) {
+      throw new BadRequestException('BANK_DETAILS_MISSING');
+    }
+
+    // Safely shift processing locks out of the available pool immediately
+    await tx.vendorWallet.update({
+      where: { vendorId: wRequest.vendorId },
+      data: {
+        pendingBalance: {
+          decrement: Number(wRequest.amount),
         },
       },
-    },
+    });
+
+    // Move to temporary state inside isolated context boundaries
+    return tx.withdrawalRequest.update({
+      where: { id },
+      data: { status: WithdrawalStatus.PROCESSING },
+      include: { vendor: { include: { user: true } } },
+    });
   });
 
-      if (!request) {
-        throw new NotFoundException(
-          `Withdrawal ${id} not found`,
-        );
-      }
-      if (
-  request.status !==
-  WithdrawalStatus.PENDING
-) {
-  throw new BadRequestException(
-    'WITHDRAWAL_ALREADY_PROCESSED',
-  );
-}
+  const bankDetails = request.bankDetails as any;
+  let transfer: any;
 
-      const bankDetails =
-        request.bankDetails as {
-          bankCode: string;
-          bankName: string;
-          accountNumber: string;
-          accountName: string;
-        };
+  // PHASE 2: Live External Gateway Transfer Engine
+  try {
+    this.logger.warn(`🚀 FIRING OFF-CHAIN PAYOUT TO FLUTTERWAVE: Request ID: ${request.id}`);
+    
+    transfer = await this.paymentsService.initiateTransfer({
+      amount: Number(request.amount),
+      bankCode: bankDetails.bankCode,
+      accountNumber: bankDetails.accountNumber,
+      narration: `Vendor payout for ${request.vendor.storeName}`,
+      reference: `PAYOUT-${request.id}`,
+    });
 
-      if (
-        !bankDetails ||
-        !bankDetails.bankCode ||
-        !bankDetails.accountNumber
-      ) {
-        throw new BadRequestException(
-          'BANK_DETAILS_MISSING',
-        );
-      }
-
-      const transfer =
-        await this.paymentsService.initiateTransfer({
-          amount: Number(request.amount),
-          bankCode: bankDetails.bankCode,
-          accountNumber:
-            bankDetails.accountNumber,
-          narration: `Vendor payout for ${request.vendor.storeName}`,
-          reference: `PAYOUT-${request.id}`,
-        });
-
-        await tx.vendorWallet.update({
-  where: {
-    vendorId: request.vendorId,
-  },
-  data: {
-    pendingBalance: {
-      decrement: Number(request.amount),
-    },
-  },
-});
-
-      const updatedRequest =
-        await tx.withdrawalRequest.update({
-          where: { id },
-          data: {
-            status:
-              WithdrawalStatus.PROCESSING,
-            metadata: {
-              transferId:
-                transfer.id,
-              transferRef:
-                transfer.reference,
-              approvedAt:
-                new Date(),
-              approvedBy: adminId,
-            },
-          },
-        });
-
-        await this.notificationService.send({
-  userId: request.vendor.userId,
-  userEmail: request.vendor.user?.email,
-  title: 'Withdrawal Approved',
-  message: `Your withdrawal of ₦${request.amount} is being processed by the bank.`,
-  category: 'withdrawals',
-});
-
-        await tx.walletTransaction.updateMany({
-  where: {
-    withdrawalRequestId: request.id,
-    type: 'WITHDRAW',
-    status: 'PENDING',
-  },
-  data: {
-    status: 'PROCESSING',
-  },
-});
-
-      await tx.auditLog.create({
-        data: {
-          adminId,
-          action:
-            AuditAction.APPROVE_PAYOUT,
-          targetId: id,
-          targetType:
-            'WITHDRAWAL',
-          details: `PAYOUT SENT: ₦${request.amount}`,
-        },
+    if (!transfer || !transfer.id) {
+      throw new Error('Flutterwave tracking parameter declaration missing or empty');
+    }
+  } catch (error: any) {
+    this.logger.error(`🚨 FLUTTERWAVE DISPATCH FAILED: ${error.message}. Reverting database state.`);
+    
+    // SAFE FALLBACK RECOVERY: Revert internal metrics if external pipes break down
+    await this.prisma.$transaction(async (tx) => {
+      await tx.vendorWallet.update({
+        where: { vendorId: request.vendorId },
+        data: { pendingBalance: { increment: Number(request.amount) } },
       });
+      await tx.withdrawalRequest.update({
+        where: { id },
+        data: { status: WithdrawalStatus.PENDING },
+      });
+    });
 
-      return {
-        message:
-          'PAYOUT_TRANSFER_INITIATED',
-        data: updatedRequest,
-        transfer,
-      };
-    },
-  );
+    throw new BadRequestException(`TRANSFER_GATEWAY_REJECTION: ${error.message}`);
+  }
+
+  // PHASE 3: Commit Final External Transaction Identifiers to Ledger
+  return this.prisma.$transaction(async (tx) => {
+    const updatedRequest = await tx.withdrawalRequest.update({
+      where: { id },
+      data: {
+        metadata: {
+          transferId: transfer.id,
+          transferRef: transfer.reference,
+          approvedAt: new Date(),
+          approvedBy: adminId,
+        },
+      },
+    });
+
+    await tx.walletTransaction.updateMany({
+      where: {
+        withdrawalRequestId: request.id,
+        type: 'WITHDRAW',
+        status: 'PENDING',
+      },
+      data: { status: 'PROCESSING' },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        adminId,
+        action: AuditAction.APPROVE_PAYOUT,
+        targetId: id,
+        targetType: 'WITHDRAWAL',
+        details: `PAYOUT SENT SUCCESSFULLY: ₦${request.amount} via Ref ${transfer.reference}`,
+      },
+    });
+
+    // Fire notifications asynchronously outside blocking return structures
+    this.notificationService.send({
+      userId: request.vendor.userId,
+      userEmail: request.vendor.user?.email,
+      title: 'Withdrawal Approved',
+      message: `Your withdrawal of ₦${request.amount} is being processed by the bank.`,
+      category: 'withdrawals',
+    }).catch(err => this.logger.error(`Notification dispatch failed background trace: ${err.message}`));
+
+    return {
+      message: 'PAYOUT_TRANSFER_INITIATED',
+      data: updatedRequest,
+      transfer,
+    };
+  });
 }
 
 async rejectWithdrawal(
