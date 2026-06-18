@@ -1,7 +1,6 @@
 import {
   IsString,
   IsNumber,
-  IsPositive,
   MinLength,
   IsOptional,
   IsArray,
@@ -10,6 +9,7 @@ import {
   IsInt,
   Min,
   ValidateNested,
+  ArrayMinSize,
 } from 'class-validator';
 import { ProductOrigin } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
@@ -19,19 +19,19 @@ import { CreateVariantDto } from './variant.dto';
 export class CreateProductDto {
   @ApiProperty({ example: 'Wireless Headphones' })
   @IsString()
-  @MinLength(3)
+  @MinLength(3, { message: 'Product title must be at least 3 characters long.' })
   title!: string;
 
   @ApiProperty({ example: 'High-quality noise-canceling headphones.' })
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Product description description stream is required.' })
   description!: string;
 
   @ApiProperty({ example: 99.99 })
   @IsNumber()
   @Min(0)
   @IsOptional()
-  price?: number;                    // Made optional - variants will drive pricing
+  price?: number; // Kept optional at root level since variants handle item metrics now
 
   @ApiProperty({ example: 50 })
   @IsInt()
@@ -41,11 +41,11 @@ export class CreateProductDto {
 
   @ApiProperty({ example: 'category-uuid' })
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'A parent category definition ID must be linked.' })
   categoryId!: string;
 
   @ApiProperty({ enum: ProductOrigin, example: 'LOCAL' })
-  @IsEnum(ProductOrigin)
+  @IsEnum(ProductOrigin, { message: 'Product origin classification must be specified.' })
   origin!: ProductOrigin;
 
   @ApiProperty({ example: 1 })
@@ -58,17 +58,17 @@ export class CreateProductDto {
   @Min(1)
   deliveryMax!: number;
 
-  // 🔥 GENERAL IMAGES - Main gallery shown by default (Temu style)
   @ApiProperty({ required: false, type: [String] })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   generalImages?: string[];
 
-  // Variants (Required for multivendor marketplace)
+  // 🛑 BLOCKED: Enforces that variations cannot be an empty matrix stream.
   @ApiProperty({ type: [CreateVariantDto], required: true })
-  @IsArray()
+  @IsArray({ message: 'Variants payload stream must be a structural array.' })
+  @ArrayMinSize(1, { message: 'Rejection: A minimum of one product variant must be fully defined.' })
   @ValidateNested({ each: true })
   @Type(() => CreateVariantDto)
-  variants!: CreateVariantDto[];     // Made required (!)
+  variants!: CreateVariantDto[];
 }
