@@ -55,14 +55,14 @@ async initiateTransfer(data: {
     reference: string;
   }) {
     try {
-      this.logger.log(`📡 Streaming payout through Cloudflare Tunnel. Ref: ${data.reference}`);
+      this.logger.log(`📡 Streaming payout through Static Webshare Proxy. Ref: ${data.reference}`);
 
-      // Your live Cloudflare Worker URL
-      const cloudflareProxyUrl = 'https://rapid-tree-6d88.kofohaven.workers.dev';
+      // 1. Target the official Flutterwave Live Transfers Endpoint directly
+      const flutterwaveUrl = 'https://flutterwave.com';
 
-      // We make a direct HTTP call to your secure Cloudflare Worker instead of using the SDK
+      // 2. Make the HTTP call routing through the Webshare static proxy network
       const response = await axios.post(
-        cloudflareProxyUrl,
+        flutterwaveUrl,
         {
           account_bank: data.bankCode,
           account_number: data.accountNumber,
@@ -74,22 +74,29 @@ async initiateTransfer(data: {
         },
         {
           headers: {
-            // Your production secret key must be passed along for Flutterwave to authorize the transfer
             Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
             'Content-Type': 'application/json',
+          },
+          // 3. Inject Webshare Proxy credentials to anchor your Outbound IP Address
+          proxy: {
+            protocol: 'http',
+            host: '31.59.20.176',     // <-- Paste the IP Address here (e.g., '45.123.45.67')
+            port: 6754,                              // <-- Replace with your Webshare Port number (usually 8000)
+            auth: {
+              username: 'vzbnbgkp',    // <-- Paste your Webshare Username here
+              password: '8yd0vlfws7m8',    // <-- Paste your Webshare Password here
+            },
           },
         },
       );
 
       const result = response.data;
-      this.logger.debug(`📥 Tunnel Response Payload: ${JSON.stringify(result)}`);
+      this.logger.debug(`📥 Gateway Proxy Response Payload: ${JSON.stringify(result)}`);
 
-      // Handle custom error response structures from Flutterwave's gateway safely
       if (result?.status === 'error' || result?.status === 'failed') {
         throw new Error(result?.message || 'Flutterwave gateway rejected the transaction parameters');
       }
 
-      // Map parameters directly to match exactly what your settlement service engine expects
       return {
         id: result?.data?.id || result?.id,
         reference: result?.data?.reference || result?.reference,
@@ -98,7 +105,6 @@ async initiateTransfer(data: {
       };
 
     } catch (error: any) {
-      // Extract the deepest validation error returned across the proxy line
       const gatewayErrorMessage = 
         error?.response?.data?.message || 
         error?.message || 
@@ -109,6 +115,7 @@ async initiateTransfer(data: {
       throw new InternalServerErrorException(`GATEWAY_REJECTION: ${gatewayErrorMessage}`);
     }
   }
+
   // =====================================================
   // PAYMENT INITIALIZATION
   // =====================================================
