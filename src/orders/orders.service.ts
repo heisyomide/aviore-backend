@@ -35,17 +35,14 @@ export class OrdersService {
       quantity: i.quantity,
     }));
 
-    // 1. Calculate order total dynamically to handle any pricing shifts
-    let evaluation: ReturnType<typeof this.pricingService.calculateCheckoutTotal> extends Promise<infer R> ? R : any;
+    let evaluation: any;
     try {
       evaluation = await this.pricingService.calculateCheckoutTotal(inputItems);
     } catch (err: any) {
       throw new BadRequestException(err.message || 'PRICING_EVALUATION_FAILED');
     }
 
-    // 2. Execute database operations inside an atomic transaction block
     const order = await this.prisma.$transaction(async (tx) => {
-      // Structural inventory guardrails to protect against checkout race conditions
       await this.inventoryService.verifyStockAvailability(tx, inputItems);
       await this.inventoryService.deductInventory(tx, inputItems);
 
@@ -53,8 +50,8 @@ export class OrdersService {
         data: {
           userId,
           addressId: createOrderDto.addressId,
-          vendorId: evaluation.vendorId,
-          status: 'PENDING',
+          // ❌ REMOVED: vendorId: evaluation.vendorId (An order can have multiple vendors)
+          status: 'PENDING', // Master parent status
           totalAmount: evaluation.grandTotal,
 
           campaignLogs: {
@@ -67,7 +64,7 @@ export class OrdersService {
           items: {
             create: evaluation.items.map((i) => {
               const gross = Number(i.finalPrice) * Number(i.quantity);
-              const platformCommission = gross * 0.10; // Aligned with PaymentsService COMMISSION_RATE
+              const platformCommission = gross * 0.10; 
               const vendorNetEarning = Math.max(0, gross - platformCommission);
 
               return {
@@ -76,9 +73,11 @@ export class OrdersService {
                 product: {
                   connect: { id: i.productId }
                 },
-                vendorId: i.vendorId,
+                vendorId: i.vendorId, // ✅ Kept here! Each row belongs to its true vendor
 
-                // 🛠️ PRE-POPULATE THE FINANCIAL FIELDS SO SETTLEMENT CAN READ THEM:
+                // 🟢 PRE-POPULATE THE INDEPENDENT FULFILLMENT STATUS AT CREATION:
+                status: 'PENDING', 
+
                 commission: platformCommission,
                 platformCommission: platformCommission,
                 vendorEarning: vendorNetEarning,
@@ -95,7 +94,6 @@ export class OrdersService {
         },
       });
 
-      // Clear the user's active cart upon successful order registration
       await tx.cartItem.deleteMany({
         where: { cart: { userId } },
       });

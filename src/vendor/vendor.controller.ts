@@ -63,51 +63,84 @@ async getStats(@Req() req) {
     return this.vendorService.createProduct(req.user.vendorId, dto, file);
   }
 @Get('orders')
-  @Roles('VENDOR')
-  async getMyOrders(@Req() req) {
-    const vendorId = req.user.vendorId;
+@Roles('VENDOR')
+async getMyOrders(@Req() req) {
+  const vendorId = req.user.vendorId;
 
-    if (!vendorId) {
-      throw new BadRequestException('Action denied. Valid vendor identity node required.');
-    }
+  if (!vendorId) {
+    throw new BadRequestException('Action denied. Valid vendor identity node required.');
+  }
 
-    return this.prisma.order.findMany({
-      where: {
-        items: {
-          some: {
-            vendorId: vendorId, // ✅ Safely fetch the order if this vendor has a stake in it
-          },
-        },
-      },
-      include: { 
-        user: { 
-          select: { 
-            email: true,
-            firstName: true,
-            lastName: true
-          } 
-        },
-        items: {
-          where: {
-            vendorId: vendorId, // 🛑 CRITICAL DATA PROTECTION: Only include this vendor's line items!
-          },
-          include: {
-            product: {
-              select: {
-                title: true,
-                images: {
-                  select: { imageUrl: true },
-                  take: 1
-                }
-              }
-            }
+  // 🟢 Query from orderItem table to seamlessly isolate data boundaries
+  const vendorLineItems = await this.prisma.orderItem.findMany({
+    where: {
+      vendorId: vendorId // Directly fetch rows owned by this vendor instance
+    },
+    include: {
+      product: {
+        select: {
+          title: true,
+          images: {
+            select: { imageUrl: true },
+            take: 1
           }
         }
       },
-      orderBy: { createdAt: 'desc' }
-    });
-  }
+      order: {
+        include: {
+          user: {
+            select: {
+              email: true,
+              firstName: true,
+              lastName: true
+            }
+          },
+          address: true // Useful context info for logistics fulfillment
+        }
+      }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
 
+  // Transform the query rows into a structured payload for your dashboard UI 
+  return vendorLineItems.map((item) => {
+    // Dynamically multiply base variables using standard arithmetic mapping
+    const itemQuantity = item.quantity;
+    const pricePerUnit = Number(item.priceAtPurchase);
+    const calculatedSubtotal = pricePerUnit * itemQuantity;
+
+    return {
+      orderItemId: item.id,
+      orderId: item.orderId,
+      orderNumber: item.order.orderNumber,
+      createdAt: item.createdAt,
+      
+      // 💸 FIXED: Calculates the vendor's actual financial scope instead of leaking the whole checkout basket total
+      vendorSubtotalAmount: calculatedSubtotal, 
+      retailAmount: item.retailAmount ? Number(item.retailAmount) : calculatedSubtotal,
+      vendorEarning: item.vendorEarning,
+      
+      // 🔄 FIXED: Shows this specific vendor's fulfillment step, unaffected by peer actions
+      itemStatus: item.status, 
+      payoutStatus: item.payoutStatus,
+      
+      productDetails: {
+        productId: item.productId,
+        title: item.product?.title,
+        variantId: item.variantId,
+        mainImage: item.product?.images?.[0]?.imageUrl || null
+      },
+      customer: {
+        firstName: item.order.user.firstName,
+        lastName: item.order.user.lastName,
+        email: item.order.user.email,
+        shippingAddress: item.order.address
+      },
+      // Keep master tracking details attached as sub-properties if necessary
+      masterOrderGlobalStatus: item.order.status 
+    };
+  });
+}
   @Get('orders/:id')
 @Roles('VENDOR')
 async getOrderDetails(@Param('id') id: string, @Req() req) {

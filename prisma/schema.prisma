@@ -480,6 +480,7 @@ model OrderItem {
   priceAtPurchase       Decimal         @db.Decimal(12, 2)
   orderId               String
   productId             String
+  status                String          @default("PENDING") // PENDING, PROCESSING, SHIPPED, DELIVERED
   commission            Float?
   vendorEarning         Float?
   payoutStatus          String?         @default("LOCKED")

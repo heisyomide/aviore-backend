@@ -946,68 +946,76 @@ async getOrderDetails(orderId: string, vendorId: string) {
 async updateOrderStatus(
   orderId: string, 
   vendorId: string, 
-  dto: { status: OrderStatus; trackingNumber?: string; carrier?: string }
+  dto: { status: string; trackingNumber?: string; carrier?: string } // Shift to string or Item-level enum if preferred
 ) {
-  // 1. VERIFY OWNER ISOLATION & UPDATE FINANCIAL STATE IF COMPLETED
-  // First, verify the vendor owns items in this checkout basket
+  // 1. VERIFY OWNER ISOLATION & UPDATE THE SPECIFIC ITEM STATUS
   const vendorItems = await this.prisma.orderItem.findMany({
     where: {
       orderId: orderId,
-      product: { vendorId: vendorId }
+      vendorId: vendorId // Directly use the item-level vendorId from your schema
     }
   });
 
   if (!vendorItems.length) {
     throw new ForbiddenException(
-      'Order not found or access denied: You do not own any items in this registry.'
+      'Order not found or access denied: You do not own any items in this checkout registry.'
     );
   }
 
-  // If the status is COMPLETED, move this vendor's item escrow states out of LOCKED phase
-  if (dto.status === 'COMPLETED' || (dto.status as any) === 'COMPLETED') {
-    await this.prisma.orderItem.updateMany({
-      where: {
-        orderId: orderId,
-        product: { vendorId: vendorId }
-      },
-      data: {
-        payoutStatus: 'SETTLED'
-      }
-    });
+  // Define database updates for this vendor's specific order items
+  const itemUpdateData: any = {
+    status: dto.status // ✅ Crucial: Advance this vendor's items independently (e.g., 'PROCESSING', 'SHIPPED')
+  };
+
+  // If the vendor is marking their item status as COMPLETED, move their financial state out of escrow locking
+  if (dto.status === 'COMPLETED') {
+    itemUpdateData.payoutStatus = 'SETTLED';
   }
+
+  // Execute the isolated update on the sub-items
+  await this.prisma.orderItem.updateMany({
+    where: {
+      orderId: orderId,
+      vendorId: vendorId
+    },
+    data: itemUpdateData
+  });
 
   this.logger.log(`✅ Vendor ${vendorId} advancing order items toward state: ${dto.status}`);
 
   // 2. LIFECYCLE EVALUATION FOR MULTI-VENDOR FLOW
-  let parentOrderStatus: OrderStatus = dto.status;
-
-  // Check if there are ANY items left in the entire order that belong to OTHER vendors 
-  // and are still stuck in a raw payment/processing state.
-  const pendingOtherVendorItems = await this.prisma.orderItem.count({
+  // Check if there are ANY items left in the entire checkout order that belong to OTHER vendors 
+  // and are still lingering behind in a less progressive state.
+  const incompleteOtherVendorItems = await this.prisma.orderItem.count({
     where: {
       orderId: orderId,
-      product: {
-        vendorId: { not: vendorId } // Look at other vendors' items
-      },
-      payoutStatus: 'LOCKED' // They haven't completed their fulfillment cycle yet
+      vendorId: { not: vendorId }, // Look exclusively at peer items
+      status: { notIn: ['COMPLETED', 'SHIPPED'] } // Items that haven't cleared the fulfillment cycle
     }
   });
 
-  // CRITICAL LIFECYCLE GUARD:
-  // If this vendor is marking their share as SHIPPED or COMPLETED, but another vendor 
-  // hasn't touched theirs yet, the parent order should show an intermediary "PROCESSING" 
-  // or "PARTIALLY_SHIPPED" state so the user knows parts are still pending.
-  if (pendingOtherVendorItems > 0 && dto.status === 'COMPLETED') {
-    // If you have a PARTIALLY_SHIPPED enum value, use it here; otherwise fall back to PROCESSING
-    parentOrderStatus = OrderStatus.PROCESSING; 
+  // Calculate what the parent Order status should drop down to
+  let parentOrderStatus: OrderStatus = OrderStatus.PROCESSING;
+
+  if (incompleteOtherVendorItems === 0 && dto.status === 'COMPLETED') {
+    // If every vendor has completely delivered their split allocations, close the master order lifecycle
+    parentOrderStatus = OrderStatus.COMPLETED;
+  } else if (dto.status === 'PENDING') {
+    parentOrderStatus = OrderStatus.PENDING;
+  } else {
+    // If this vendor is finished or shipped, but peers are still processing/pending, 
+    // keep the master order active as PROCESSING so the customer knows things are still moving.
+    parentOrderStatus = OrderStatus.PROCESSING;
     this.logger.log(`📦 Parent Order ${orderId} held at PROCESSING because other vendors have pending allocations.`);
   }
 
-  // 3. SAFELY UPDATE THE PARENT ORDER Lifecycle Status & Logistics Tracking
+  // 3. SAFELY UPDATE THE PARENT ORDER Lifecycle Status & Global Logistics Tracking (if applicable)
   const order = await this.prisma.order.update({
     where: { id: orderId },
     data: {
       status: parentOrderStatus,
+      // Note: Tracking properties can be handled on individual item rows if vendors ship separately,
+      // but if tracking at parent level, append safely:
       ...(dto.trackingNumber && { trackingNumber: dto.trackingNumber }),
       ...(dto.carrier && { carrier: dto.carrier }),
     },
@@ -1017,7 +1025,7 @@ async updateOrderStatus(
   });
 
   // 4. AUTO-TRIGGER ESCROW RELEASE FOR THIS SPECIFIC VENDOR
-  if (dto.status === 'COMPLETED' || (dto.status as any) === 'COMPLETED') {
+  if (dto.status === 'COMPLETED') {
     try {
       this.logger.log(`🔄 Auto-routing Order ${orderId} line-items to settlement engine for Vendor ${vendorId}`);
       await this.markOrderAsCompleted(orderId, vendorId); 
@@ -1029,15 +1037,15 @@ async updateOrderStatus(
 
   // 5. DISPATCH CUSTOMIZED USER NOTIFICATIONS
   try {
-    let messageText = `Your order status has been updated to ${dto.status}.`;
+    let messageText = `Your order items have been updated to ${dto.status}.`;
     let notificationTitle = 'Order Updated';
 
     if (dto.status === 'SHIPPED') {
-      notificationTitle = 'Order Shipped!';
-      messageText = `Good news! Your package has been handed over to the courier. Carrier: ${dto.carrier ?? 'Standard'}, Tracking Number: ${dto.trackingNumber ?? 'N/A'}`;
+      notificationTitle = 'Order Part-Shipped!';
+      messageText = `Good news! A portion of your package has been handed over to the courier. Carrier: ${dto.carrier ?? 'Standard'}, Tracking Number: ${dto.trackingNumber ?? 'N/A'}`;
     } else if (dto.status === 'COMPLETED') {
-      notificationTitle = pendingOtherVendorItems > 0 ? 'Order Partially Delivered' : 'Order Fully Completed!';
-      messageText = pendingOtherVendorItems > 0
+      notificationTitle = incompleteOtherVendorItems > 0 ? 'Order Partially Delivered' : 'Order Fully Completed!';
+      messageText = incompleteOtherVendorItems > 0
         ? `A portion of your items has been successfully delivered by the vendor.`
         : `Your entire order has been fully completed and delivered!`;
     }
@@ -1056,6 +1064,9 @@ async updateOrderStatus(
 
   return order;
 }
+
+
+
 async getCustomerDetails(vendorId: string, userId: string) {
   return this.prisma.orderItem.findMany({
     where: {
