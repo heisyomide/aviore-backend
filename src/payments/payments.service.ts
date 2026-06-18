@@ -64,7 +64,7 @@ async initiateTransfer(data: {
     try {
       this.logger.log(`📡 Streaming payout through Static Webshare Proxy. Ref: ${data.reference}`);
 
-      const flutterwaveUrl = 'https://flutterwave.com';
+      const flutterwaveUrl = 'https://api.flutterwave.com/v3/transfers';
       const proxyHost = '31.59.20.176';
       const proxyPort = '6754';
       const proxyUser = 'vzbnbgkp';
