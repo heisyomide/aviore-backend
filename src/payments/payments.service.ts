@@ -50,6 +50,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
 
 
+
 async initiateTransfer(data: {
     amount: number;
     bankCode: string;
@@ -60,20 +61,15 @@ async initiateTransfer(data: {
     try {
       this.logger.log(`📡 Streaming payout through Static Webshare Proxy. Ref: ${data.reference}`);
 
-      // 1. FIXED: Correctly target Flutterwave's actual Live API Endpoint, not the homepage
       const flutterwaveUrl = 'https://flutterwave.com';
-
-      // 2. Extract your Webshare credentials cleanly
       const proxyHost = '31.59.20.176';
       const proxyPort = '6754';
       const proxyUser = 'vzbnbgkp';
       const proxyPass = '8yd0vlfws7m8';
 
-      // 3. FIXED: Build a bulletproof Agent string to force Axios to cleanly transport auth data
       const proxyAgent = new HttpsProxyAgent(`http://${proxyUser}:${proxyPass}@${proxyHost}:${proxyPort}`);
 
-      // 4. Fire the transfer payload directly through the secure tunnel
-      const response = await  axios.post(
+      const response = await axios.post(
         flutterwaveUrl,
         {
           account_bank: data.bankCode,
@@ -85,8 +81,8 @@ async initiateTransfer(data: {
           debit_currency: 'NGN',
         },
         {
-          httpsAgent: proxyAgent, // Bind the Webshare structural tunnel to the request network
-          proxy: false,           // Tell Axios to bypass local network routing defaults
+          httpsAgent: proxyAgent,
+          proxy: false,
           headers: {
             Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
             'Content-Type': 'application/json',
@@ -101,13 +97,12 @@ async initiateTransfer(data: {
         throw new Error(result?.message || 'Flutterwave gateway rejected the transaction parameters');
       }
 
-      // 5. FIXED: Multi-layered mapping guarantees AdminService tracking parameters never evaluate to empty
       const finalId = result?.data?.id || result?.id;
       const finalReference = result?.data?.reference || result?.reference || data.reference;
       const finalStatus = result?.data?.status || result?.status;
 
-      if (!finalId || !finalReference) {
-         throw new Error('Flutterwave tracking parameter declaration missing or empty');
+      if (!finalId) {
+         throw new Error(`Flutterwave missing ID payload. Raw status: ${finalStatus}`);
       }
 
       return {
@@ -118,16 +113,22 @@ async initiateTransfer(data: {
       };
 
     } catch (error: any) {
-      const gatewayErrorMessage = 
-        error?.response?.data?.message || 
-        error?.message || 
-        'UNKNOWN_TUNNEL_GATEWAY_ERROR';
+      // CRITICAL DEBUG: Extract exact structural error payload details from Flutterwave
+      let trueGatewayError = 'UNKNOWN_TUNNEL_GATEWAY_ERROR';
 
-      this.logger.error(`❌ TUNNEL_PAYOUT_FAILED: ${gatewayErrorMessage}`);
-      
-      throw new InternalServerErrorException(`GATEWAY_REJECTION: ${gatewayErrorMessage}`);
+      if (error?.response?.data) {
+        // If Flutterwave returned a JSON error object, log it completely
+        this.logger.error(`🚨 RAW FLUTTERWAVE ERROR OBJECT: ${JSON.stringify(error.response.data)}`);
+        trueGatewayError = error.response.data.message || JSON.stringify(error.response.data);
+      } else {
+        trueGatewayError = error.message || String(error);
+      }
+
+      this.logger.error(`❌ TUNNEL_PAYOUT_FAILED: ${trueGatewayError}`);
+      throw new InternalServerErrorException(`GATEWAY_REJECTION: ${trueGatewayError}`);
     }
   }
+
 
 
   // =====================================================
