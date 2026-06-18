@@ -49,12 +49,7 @@ export class PaymentsService implements OnModuleInit {
   // =====================================================
   // PAYOUT TRANSFER
   // =====================================================
-
-
-
-
-
-async initiateTransfer(data: {
+  async initiateTransfer(data: {
     amount: number;
     bankCode: string;
     accountNumber: string;
@@ -95,14 +90,12 @@ async initiateTransfer(data: {
 
       const result = response.data;
       
-      // CRITICAL LOG: This prints the exact structure Flutterwave is sending back to Render logs
       this.logger.warn(`📥 RAW FLUTTERWAVE PAYLOAD RECEIVED: ${JSON.stringify(result)}`);
 
       if (result?.status === 'error' || result?.status === 'failed') {
         throw new Error(result?.message || 'Flutterwave gateway rejected the transaction parameters');
       }
 
-      // Extract tracking identifiers or construct robust fallbacks
       const finalId = result?.data?.id || result?.id || `FLW-FALLBACK-${crypto.randomUUID()}`;
       const finalReference = result?.data?.reference || result?.reference || data.reference;
       const finalStatus = result?.data?.status || result?.status || 'NEW';
@@ -130,8 +123,6 @@ async initiateTransfer(data: {
       throw new InternalServerErrorException(`GATEWAY_REJECTION: ${trueGatewayError}`);
     }
   }
-
-
 
   // =====================================================
   // PAYMENT INITIALIZATION
@@ -207,20 +198,48 @@ async initiateTransfer(data: {
   }
 
   // =====================================================
-  // WEBHOOK GATEWAY RESOLVER
+  // CENTRAL ROUTER ORCHESTRATOR
   // =====================================================
-async handleWebhook(signature: string, body: any) {
+  async handleIncomingWebhook(signature: string, body: any) {
     const secretHash = process.env.FLW_WEBHOOK_HASH;
     if (!signature || signature !== secretHash) {
       throw new BadRequestException('INVALID_SIGNATURE');
     }
 
+    if (!body || !body.data) {
+      throw new BadRequestException('INVALID_PAYLOAD');
+    }
+
+    // Explicitly identify transfer structures by root event names or inner parameter keys
+    const isTransferEvent = 
+      body.event?.startsWith('transfer.') || 
+      'debit_currency' in body.data || 
+      (!body.data.tx_ref && body.data.reference);
+
+    if (isTransferEvent) {
+      this.logger.log(`🔀 Webhook Router: Forwarding payload to [handleTransferWebhook]. Ref: ${body.data.reference}`);
+      return this.handleTransferWebhook(signature, body);
+    }
+
+    this.logger.log(`🔀 Webhook Router: Forwarding payload to [handleWebhook] (Collections). Ref: ${body.data.tx_ref}`);
+    return this.handleWebhook(signature, body);
+  }
+
+  // =====================================================
+  // WEBHOOK GATEWAY RESOLVER (STANDARD INBOUND COLLECTIONS)
+  // =====================================================
+  async handleWebhook(signature: string, body: any) {
     const payload = body?.data;
     if (!payload) {
       throw new BadRequestException('INVALID_PAYLOAD');
     }
 
     const txRef = payload.tx_ref;
+    if (!txRef) {
+      this.logger.warn(`⚠️ handleWebhook dropped execution due to missing 'tx_ref' property.`);
+      return { status: 'IGNORED_MISSING_REF' };
+    }
+
     const flwId = payload.id;
     const paidAmount = Number(payload.amount);
     const status = String(payload.status).toLowerCase();
@@ -294,27 +313,27 @@ async handleWebhook(signature: string, body: any) {
       }
 
       // 3. Process allocations across downstream internal metrics balances safely
-      // ✅ ONE SINGLE SOURCE OF TRUTH: Handles multi-vendors, decimals, and marketers line-by-line cleanly.
       await this.settleOrderItems(tx, payment.order.items);
 
       return { status: 'SUCCESS' };
     });
   }
+
   // =====================================================
-  // TRANSFER WEBHOOK MANAGEMENT
+  // TRANSFER WEBHOOK MANAGEMENT (OUTBOUND PAYOUTS)
   // =====================================================
   async handleTransferWebhook(signature: string, body: any) {
-    const secretHash = process.env.FLW_WEBHOOK_HASH;
-    if (!signature || signature !== secretHash) {
-      throw new BadRequestException('INVALID_SIGNATURE');
-    }
-
     const payload = body?.data;
     if (!payload) {
       throw new BadRequestException('INVALID_PAYLOAD');
     }
 
     const reference = payload.reference;
+    if (!reference) {
+      this.logger.warn(`⚠️ handleTransferWebhook dropped execution due to missing 'reference' property.`);
+      return { status: 'IGNORED_MISSING_TRANSFER_REF' };
+    }
+
     const transferStatus = String(payload.status).toLowerCase();
 
     return this.prisma.$transaction(async (tx) => {
@@ -386,90 +405,72 @@ async handleWebhook(signature: string, body: any) {
     });
   }
 
-
-// =====================================================
+  // =====================================================
   // HIGH-PERFORMANCE ESCROW SPLIT ENGINE - MULTI-VENDOR SECURE
   // =====================================================
- // =====================================================
-  // HIGH-PERFORMANCE ESCROW SPLIT ENGINE - MULTI-VENDOR SECURE
-  // =====================================================
-private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
-  // 🔴 DIAGNOSTIC LOG 1: Check array entry bounds immediately
-  this.logger.warn(`=== SETTLE ORDER ITEMS START === Processing ${items?.length ?? 0} line items.`);
-  if (!items?.length) {
-    this.logger.error(`🚨 CRITICAL: settleOrderItems called but items array is EMPTY or UNDEFINED.`);
-    return;
-  }
-
-  // 1. Batch fetch all product/vendor context upfront to eliminate N+1 queries
-  const productIds = items.map((item) => item.productId).filter(Boolean);
-  const products = await tx.product.findMany({
-    where: { id: { in: productIds } },
-    include: {
-      vendor: {
-        select: {
-          id: true,
-          marketerId: true,
-          growthStatus: true,
-        },
-      },
-    },
-  });
-
-  this.logger.log(`Fetched context for ${products.length} unique products out of database.`);
-
-  // 2. Sequential execution across all items to insulate logs and protect transaction isolation levels
-  for (const item of items) {
-    const product = products.find((p) => p.id === item.productId);
-
-    // 🔴 DIAGNOSTIC LOG 2: Catch unlinked products before they drop out silently
-    if (!product || !product.vendorId) {
-      this.logger.error(`🚨 DISCARDED NODE: Product context or Vendor link missing for Product ID: ${item.productId} inside Item: ${item.id}`);
-      continue; // Skip safely to keep other line items moving forward
+  private async settleOrderItems(tx: Prisma.TransactionClient, items: any[]) {
+    this.logger.warn(`=== SETTLE ORDER ITEMS START === Processing ${items?.length ?? 0} line items.`);
+    if (!items?.length) {
+      this.logger.error(`🚨 CRITICAL: settleOrderItems called but items array is EMPTY or UNDEFINED.`);
+      return;
     }
 
-    const currentVendorId = product.vendorId;
+    const productIds = items.map((item) => item.productId).filter(Boolean);
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            marketerId: true,
+            growthStatus: true,
+          },
+        },
+      },
+    });
 
-    // --- AIRTIGHT DECIMAL WATERFALL FLOW ---
-    const priceAtPurchase = new Prisma.Decimal(item.priceAtPurchase);
-    const quantity = new Prisma.Decimal(item.quantity);
-    
-    // 1. Calculate Gross Allocation for this specific line item
-    const dbGross = priceAtPurchase.mul(quantity);
-    
-    // 2. Platform Fee Pool (Strict 10% fee baseline)
-    const dbPlatformCommission = dbGross.mul(new Prisma.Decimal(String(this.COMMISSION_RATE))); 
-    
-    // 3. Deduct Vouchers and Discounts cleanly from the platform's cut
-    const dbVendorCouponAmount = new Prisma.Decimal(item.vendorCouponAmount ?? 0);
-    const dbReferralVoucherAmount = new Prisma.Decimal(item.referralVoucherAmount ?? 0);
-    
-    const platformNetCommission = dbPlatformCommission.sub(dbReferralVoucherAmount);
-    const dbSafePlatformNet = Prisma.Decimal.max(0, platformNetCommission);
+    this.logger.log(`Fetched context for ${products.length} unique products out of database.`);
 
-    // 4. ATOMIC GROWTH SYSTEM ROUTING
-    // Passing transaction context straight down into your Growth Ledger Service engine
-    const dbMarketerCommission = await this.commissionLedgerService.processOrderItemCommissionSplitWithTx(
-      item.orderId,
-      item.id,
-      currentVendorId,
-      dbSafePlatformNet,
-      tx
-    );
+    for (const item of items) {
+      const product = products.find((p) => p.id === item.productId);
+
+      if (!product || !product.vendorId) {
+        this.logger.error(`🚨 DISCARDED NODE: Product context or Vendor link missing for Product ID: ${item.productId} inside Item: ${item.id}`);
+        continue;
+      }
+
+      const currentVendorId = product.vendorId;
+
+      const priceAtPurchase = new Prisma.Decimal(item.priceAtPurchase);
+      const quantity = new Prisma.Decimal(item.quantity);
       
-    // 5. Retained AVIORÈ platform profit (Guarded against accidental negative platform bleed)
-    const avioreCommission = dbSafePlatformNet.sub(dbMarketerCommission);
-    const dbAvioreCommission = Prisma.Decimal.max(0, avioreCommission);
-    
-    // 6. Net Vendor balance payout calculation
-    const vendorBaseEarning = dbGross.sub(dbPlatformCommission);
-    const vendorNetEarning = vendorBaseEarning.sub(dbVendorCouponAmount);
-    const dbVendorNetEarning = Prisma.Decimal.max(0, vendorNetEarning);
+      const dbGross = priceAtPurchase.mul(quantity);
+      const dbPlatformCommission = dbGross.mul(new Prisma.Decimal(String(this.COMMISSION_RATE))); 
+      
+      const dbVendorCouponAmount = new Prisma.Decimal(item.vendorCouponAmount ?? 0);
+      const dbReferralVoucherAmount = new Prisma.Decimal(item.referralVoucherAmount ?? 0);
+      
+      const platformNetCommission = dbPlatformCommission.sub(dbReferralVoucherAmount);
+      const dbSafePlatformNet = Prisma.Decimal.max(0, platformNetCommission);
 
-    const marketerId = product.vendor?.marketerId ?? null;
+      const dbMarketerCommission = await this.commissionLedgerService.processOrderItemCommissionSplitWithTx(
+        item.orderId,
+        item.id,
+        currentVendorId,
+        dbSafePlatformNet,
+        tx
+      );
+        
+      const avioreCommission = dbSafePlatformNet.sub(dbMarketerCommission);
+      const dbAvioreCommission = Prisma.Decimal.max(0, avioreCommission);
+      
+      const vendorBaseEarning = dbGross.sub(dbPlatformCommission);
+      const vendorNetEarning = vendorBaseEarning.sub(dbVendorCouponAmount);
+      const dbVendorNetEarning = Prisma.Decimal.max(0, vendorNetEarning);
 
-    // 🔴 DIAGNOSTIC LOG 3: Trace evaluation values right before updates execute
-    this.logger.warn(`
+      const marketerId = product.vendor?.marketerId ?? null;
+
+      this.logger.warn(`
 === LINE ITEM CHECK ===
 OrderItemId: ${item.id}
 VendorId: ${currentVendorId}
@@ -477,86 +478,77 @@ MarketerId: ${marketerId}
 PlatformNetPool: ₦${dbSafePlatformNet.toString()}
 MarketerCommissionAllocated: ₦${dbMarketerCommission.toString()}
 VendorNetPayout: ₦${dbVendorNetEarning.toString()}
-    `);
+      `);
 
-    // --- DATABASE INTEGRATION PHASE ---
-
-    // 1. Update line item metrics independently
-    await tx.orderItem.update({
-      where: { id: item.id },
-      data: {
-        commission: dbPlatformCommission.toNumber(),      
-        vendorEarning: dbVendorNetEarning.toNumber(),    
-        payoutStatus: 'LOCKED',
-        vendorId: currentVendorId,
-        retailAmount: dbGross,
-        customerPaid: dbGross,
-        vendorCouponDiscount: dbVendorCouponAmount, 
-        referralDiscount: dbReferralVoucherAmount, 
-        platformCommission: dbPlatformCommission, 
-        platformNetCommission: dbSafePlatformNet,
-        marketingCommission: dbMarketerCommission,
-      },
-    });
-
-    // 2. Increment escrow funds specifically for the designated item vendor wallet
-    await tx.vendorWallet.upsert({
-      where: { vendorId: currentVendorId },
-      update: {
-        pendingBalance: { increment: dbVendorNetEarning },
-        totalEarnings: { increment: dbVendorNetEarning },
-      },
-      create: {
-        vendorId: currentVendorId,
-        availableBalance: 0,
-        pendingBalance: dbVendorNetEarning,
-        totalEarnings: dbVendorNetEarning,
-      },
-    });
-
-    // 3. Log comprehensive audit trail details inside GrowthCommissionLog
-    if (dbMarketerCommission.greaterThan(0) && marketerId) {
-      // 🔴 DIAGNOSTIC LOG 4: Confirm wallet updates write out successfully
-      this.logger.warn(`⚡ EXECUTING MARKETING WALLET UPSERT FOR MARKETER: ${marketerId}`);
-
-
-      await tx.growthCommissionLog.create({
+      await tx.orderItem.update({
+        where: { id: item.id },
         data: {
-          orderId: item.orderId,
-          orderItemId: item.id,
-          marketerId: marketerId, 
+          commission: dbPlatformCommission.toNumber(),      
+          vendorEarning: dbVendorNetEarning.toNumber(),    
+          payoutStatus: 'LOCKED',
           vendorId: currentVendorId,
-          
-          grossOrderAmount: dbGross.toNumber(),
-          platformFeeRetained: dbPlatformCommission.toNumber(),
-          marketingSplitPaid: dbMarketerCommission.toNumber(),
-          vendorPayoutAmount: dbVendorNetEarning.toNumber(),
-          
           retailAmount: dbGross,
           customerPaid: dbGross,
-          vendorCouponDiscount: dbVendorCouponAmount,
-          referralDiscount: dbReferralVoucherAmount,
-          vendorPayout: dbVendorNetEarning,
-          platformGrossCommission: dbPlatformCommission,
+          vendorCouponDiscount: dbVendorCouponAmount, 
+          referralDiscount: dbReferralVoucherAmount, 
+          platformCommission: dbPlatformCommission, 
           platformNetCommission: dbSafePlatformNet,
-          marketerCommission: dbMarketerCommission,
-          avioreCommission: dbAvioreCommission,
-          
-          commissionType: 'ORGANIC',
+          marketingCommission: dbMarketerCommission,
         },
       });
-    }
 
-    this.logger.log(`
+      await tx.vendorWallet.upsert({
+        where: { vendorId: currentVendorId },
+        update: {
+          pendingBalance: { increment: dbVendorNetEarning },
+          totalEarnings: { increment: dbVendorNetEarning },
+        },
+        create: {
+          vendorId: currentVendorId,
+          availableBalance: 0,
+          pendingBalance: dbVendorNetEarning,
+          totalEarnings: dbVendorNetEarning,
+        },
+      });
+
+      if (dbMarketerCommission.greaterThan(0) && marketerId) {
+        this.logger.warn(`⚡ EXECUTING MARKETING WALLET UPSERT FOR MARKETER: ${marketerId}`);
+
+        await tx.growthCommissionLog.create({
+          data: {
+            orderId: item.orderId,
+            orderItemId: item.id,
+            marketerId: marketerId, 
+            vendorId: currentVendorId,
+            grossOrderAmount: dbGross.toNumber(),
+            platformFeeRetained: dbPlatformCommission.toNumber(),
+            marketingSplitPaid: dbMarketerCommission.toNumber(),
+            vendorPayoutAmount: dbVendorNetEarning.toNumber(),
+            retailAmount: dbGross,
+            customerPaid: dbGross,
+            vendorCouponDiscount: dbVendorCouponAmount,
+            referralDiscount: dbReferralVoucherAmount,
+            vendorPayout: dbVendorNetEarning,
+            platformGrossCommission: dbPlatformCommission,
+            platformNetCommission: dbSafePlatformNet,
+            marketerCommission: dbMarketerCommission,
+            avioreCommission: dbAvioreCommission,
+            commissionType: 'ORGANIC',
+          },
+        });
+      }
+
+      this.logger.log(`
 🤝 MULTI-VENDOR SPLIT EXECUTED FOR AVIORÈ
 ITEM LINE NODE: ${item.id}
 VEND OWNER ID: ${currentVendorId}
 MARKETER COMMISSION DEPOSITED: ₦${dbMarketerCommission.toFixed(2)}
 VENDOR ESCROW BALANCE CREDIT: ₦${dbVendorNetEarning.toFixed(2)}
 PLATFORM RETAINED AMOUNT: ₦${dbAvioreCommission.toFixed(2)}
-    `);
+      `);
+    }
   }
-}
+
   // =====================================================
   // CLEAN INVENTORY RESTORATION ENGINE
   // =====================================================
@@ -574,7 +566,6 @@ PLATFORM RETAINED AMOUNT: ₦${dbAvioreCommission.toFixed(2)}
       throw new NotFoundException('ORDER_NOT_FOUND');
     }
 
-    // Return stock gracefully if the order drops from an uncompleted PENDING state
     if (order.status === OrderStatus.PENDING) {
       for (const item of order.items) {
         await tx.product.update({
