@@ -186,8 +186,7 @@ async getVendorStorefront(identifier: string) {
     description: true,
     imageUrl: true,
     isVerified: true,
-    // Add flags to selection if you need to run secondary logic down the pipeline
-    isBlacklisted: true, 
+    status: true, // Pull status field safely for secondary logic evaluation
     _count: { select: { followers: true, products: true } },
     products: {
       where: { 
@@ -200,18 +199,17 @@ async getVendorStorefront(identifier: string) {
     },
   };
 
-  // 2. Step 1: Case-Insensitive Slug Lookup with Security Guardrails
-  // 🛡️ Added: profile must not be blacklisted, must be verified, and must have a valid slug
+  // 2. Step 1: Case-Insensitive Slug Lookup with Strict Security Guardrails
   let vendor = await this.prisma.vendor.findFirst({
     where: { 
       slug: { 
         equals: identifier, 
         mode: 'insensitive' 
       },
-      isVerified: true,       // Block unverified/sandbox profiles from rendering
-      isBlacklisted: false,   // Block blacklisted vendors completely
+      isVerified: true,             // Blocks unverified profiles from parsing
+      status: VendorStatus.ACTIVE,   // Enforces active status (Drops SUSPENDED & PENDING_APPROVAL)
       NOT: {
-        slug: ''              // Guard against unconfigured layout bugs
+        slug: ''                    // Guards against unconfigured layout bugs
       }
     },
     select: vendorSelection,
@@ -223,15 +221,14 @@ async getVendorStorefront(identifier: string) {
       where: { 
         id: identifier,
         isVerified: true,
-        isBlacklisted: false,
+        status: VendorStatus.ACTIVE, // Enforces active status on fallback lookups
         slug: { not: '' }
       },
       select: vendorSelection,
     });
   }
 
-  // 4. Step 3: Final Registry Check
-  // If the record doesn't exist OR was caught by security filters, it safely drops here
+  // 4. Step 3: Final Registry Validation Check
   if (!vendor) {
     throw new NotFoundException('Vendor_Registry_Node_Null_Or_Suspended');
   }
