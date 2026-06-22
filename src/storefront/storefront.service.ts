@@ -381,33 +381,60 @@ async getBestSellers(limit: number = 10) {
   }
 
 async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
-
-  const exactDbSlug = `${parentSlug}-${groupSlug}`;
+  // 🧼 Handle matching variants for slugs cleanly (e.g., "accessories-sunglasses" or just "sunglasses")
+  const exactDbSlug = groupSlug.includes(parentSlug) 
+    ? groupSlug 
+    : `${parentSlug}-${groupSlug}`;
 
   const currentGroup = await this.prisma.category.findFirst({
     where: {
-      slug: exactDbSlug,
+      OR: [
+        { slug: exactDbSlug },
+        { slug: groupSlug }
+      ],
       parent: {
         slug: parentSlug,
       },
     },
-
     include: {
+      // 💡 LEVEL 2 PRODUCTS: Pull products attached directly to this subcategory (e.g. Accessories -> Sunglasses)
+      products: {
+        where: {
+          isDeleted: false,
+          isActive: true,
+          status: 'APPROVED',
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        include: {
+          images: true,
+          variants: {
+            include: {
+              images: true,
+            },
+          },
+          vendor: true,
+          category: true,
+        },
+      },
+      // LEVEL 3 PRODUCTS: Pull products attached to grandchildren (e.g. Fashion -> Women's Fashion -> Bags)
       children: {
         include: {
           products: {
+            where: {
+              isDeleted: false,
+              isActive: true,
+              status: 'APPROVED',
+            },
             orderBy: { createdAt: 'desc' },
-            take: 8,
-
+            take: 20,
             include: {
               images: true,
-
               variants: {
                 include: {
                   images: true,
                 },
               },
-
               vendor: true,
               category: true,
             },
@@ -423,44 +450,44 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
     );
   }
 
-  const normalizedChildren = currentGroup.children.map((child) => ({
+  // 1️⃣ Normalize products attached directly to the Subcategory (Flat Tree Level 2 - e.g. Sunglasses)
+  const normalizedDirectProducts = (currentGroup.products || []).map((p) => {
+    const variantPrices = p.variants?.map((v) => Number(v.price) || 0).filter(Boolean) || [];
+    const displayPrice = variantPrices.length > 0 ? Math.min(...variantPrices) : Number(p.price) || 0;
+    const totalStock = p.variants?.length > 0 ? p.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0) : Number(p.stock) || 0;
+
+    return {
+      ...p,
+      price: displayPrice,
+      stock: totalStock,
+      displayPrice,
+      totalStock,
+    };
+  });
+
+  // 2️⃣ Normalize products attached to Grandchildren (Deep Tree Level 3 - e.g. Women's Fashion -> Bags)
+  const normalizedChildren = (currentGroup.children || []).map((child) => ({
     ...child,
-
-    products: child.products.map((p) => {
-      const variantPrices =
-        p.variants
-          ?.map((v) => Number(v.price) || 0)
-          .filter(Boolean) || [];
-
-      const displayPrice =
-        variantPrices.length > 0
-          ? Math.min(...variantPrices)
-          : Number(p.price) || 0;
-
-      const totalStock =
-        p.variants?.length > 0
-          ? p.variants.reduce(
-              (sum, v) => sum + (Number(v.stock) || 0),
-              0
-            )
-          : Number(p.stock) || 0;
+    products: (child.products || []).map((p) => {
+      const variantPrices = p.variants?.map((v) => Number(v.price) || 0).filter(Boolean) || [];
+      const displayPrice = variantPrices.length > 0 ? Math.min(...variantPrices) : Number(p.price) || 0;
+      const totalStock = p.variants?.length > 0 ? p.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0) : Number(p.stock) || 0;
 
       return {
         ...p,
-
-        // 🔥 CRITICAL FIX
         price: displayPrice,
         stock: totalStock,
-
         displayPrice,
         totalStock,
       };
     }),
   }));
 
+  // 3️⃣ Structural Matrix Balance Response
   return {
     ...currentGroup,
-    children: normalizedChildren,
+    products: normalizedDirectProducts, // Readily available for single-tier grid components on frontend
+    children: normalizedChildren,       // Available for tiered layout lane mappings
   };
 }
 async getCategoryWorldData(parentSlug: string) {
