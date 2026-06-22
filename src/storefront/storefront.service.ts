@@ -464,191 +464,135 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
   };
 }
 async getCategoryWorldData(parentSlug: string) {
-
   const category = await this.prisma.category.findUnique({
-
     where: {
-
       slug: parentSlug,
-
     },
-
     include: {
-
       children: {
-
-        // e.g Skincare / Haircare / Makeup
-
+        // Tier 2: e.g., Skincare, Women's Fashion, Belts, Sunglasses
         include: {
-
-          children: {
-
-            // e.g Face Cream / Body Cream / Serums
-
-            include: {
-
-              products: {
-
-                where: {
-
-                  isDeleted: false,
-
-                  isActive: true,
-
-                  status: 'APPROVED',
-
-                },
-
-                take: 20,
-
-                orderBy: {
-
-                  createdAt: 'desc',
-
-                },
-
-                include: {
-
-                  images: true,
-
-                  variants: {
-
-                    include: {
-
-                      images: true,
-
-                    },
-
-                  },
-
-                  vendor: true,
-
-                  category: true,
-
-                },
-
-              },
-
+          // 💡 CRITICAL BACKEND DATA FIX: Pull products attached directly to Tier 2 (for flat structures like Accessories)
+          products: {
+            where: {
+              isDeleted: false,
+              isActive: true,
+              status: 'APPROVED',
             },
-
+            take: 20,
+            orderBy: {
+              createdAt: 'desc',
+            },
+            include: {
+              images: true,
+              variants: {
+                include: {
+                  images: true,
+                },
+              },
+              vendor: true,
+              category: true,
+            },
           },
-
+          children: {
+            // Tier 3: e.g., Face Cream, Bags, Dresses
+            include: {
+              products: {
+                where: {
+                  isDeleted: false,
+                  isActive: true,
+                  status: 'APPROVED',
+                },
+                take: 20,
+                orderBy: {
+                  createdAt: 'desc',
+                },
+                include: {
+                  images: true,
+                  variants: {
+                    include: {
+                      images: true,
+                    },
+                  },
+                  vendor: true,
+                  category: true,
+                },
+              },
+            },
+          },
         },
-
       },
-
     },
-
   });
 
   if (!category) {
-
     throw new NotFoundException(
-
       `Category ${parentSlug} not found.`,
-
     );
-
   }
 
   const formattedChildren = category.children.map((group) => {
+    // 🧠 SMART RELEVANCE SYSTEM MATCHING MATRIX
+    // Check if this particular branch uses a 3-tier deep architecture (Fashion/Beauty)
+    // or handles flat 2-tier records directly (Accessories).
+    const hasGrandchildren = group.children && group.children.length > 0;
 
-    // collect ALL products from all subcategories
+    // Collect ALL products dynamically based on tree depth
+    const allProducts = hasGrandchildren
+      ? group.children.flatMap((sub) => sub.products || []) // Deep nesting path
+      : group.products || []; // Flat category fallback path (e.g. Belts, Sunglasses)
 
-    const allProducts =
-
-      group.children.flatMap((sub) => sub.products);
-
-    // shuffle randomly
-
-    const shuffled = allProducts.sort(
-
+    // Safe shallow copy before shuffling to protect against in-place mutation crashes
+    const shuffled = [...allProducts].sort(
       () => 0.5 - Math.random()
-
     );
 
-    // take only preview amount
-
+    // Take only preview amount (8 items max per lane display)
     const selectedProducts = shuffled.slice(0, 8);
 
     const normalizedProducts = selectedProducts.map((p) => {
-
       const variantPrices =
-
         p.variants
-
           ?.map((v) => Number(v.price) || 0)
-
           .filter(Boolean) || [];
 
       const displayPrice =
-
         variantPrices.length > 0
-
           ? Math.min(...variantPrices)
-
           : Number(p.price) || 0;
 
       const totalStock =
-
         p.variants?.length > 0
-
           ? p.variants.reduce(
-
-              (sum, v) =>
-
-                sum + (Number(v.stock) || 0),
-
+              (sum, v) => sum + (Number(v.stock) || 0),
               0
-
             )
-
           : Number(p.stock) || 0;
 
       return {
-
         ...p,
-
-        // CRITICAL FIX
-
+        // CRITICAL RE-ALIGNMENT FIX
         price: displayPrice,
-
         stock: totalStock,
-
         displayPrice,
-
         totalStock,
-
       };
-
     });
 
     return {
-
       id: group.id,
-
       name: group.name,
-
       slug: group.slug,
-
       products: normalizedProducts,
-
     };
-
   });
 
   return {
-
     id: category.id,
-
     name: category.name,
-
     slug: category.slug,
-
     children: formattedChildren,
-
   };
-
 }
 
 async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
