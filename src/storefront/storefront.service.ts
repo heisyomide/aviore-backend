@@ -186,6 +186,8 @@ async getVendorStorefront(identifier: string) {
     description: true,
     imageUrl: true,
     isVerified: true,
+    // Add flags to selection if you need to run secondary logic down the pipeline
+    isBlacklisted: true, 
     _count: { select: { followers: true, products: true } },
     products: {
       where: { 
@@ -198,29 +200,40 @@ async getVendorStorefront(identifier: string) {
     },
   };
 
-  // 2. Step 1: Case-Insensitive Slug Lookup
-  // We use findFirst because findUnique does not support 'mode: insensitive'
+  // 2. Step 1: Case-Insensitive Slug Lookup with Security Guardrails
+  // 🛡️ Added: profile must not be blacklisted, must be verified, and must have a valid slug
   let vendor = await this.prisma.vendor.findFirst({
     where: { 
       slug: { 
         equals: identifier, 
-        mode: 'insensitive' // 🚀 FIX: Handles havenstore vs Havenstore
-      } 
+        mode: 'insensitive' 
+      },
+      isVerified: true,       // Block unverified/sandbox profiles from rendering
+      isBlacklisted: false,   // Block blacklisted vendors completely
+      NOT: {
+        slug: ''              // Guard against unconfigured layout bugs
+      }
     },
     select: vendorSelection,
   });
 
-  // 3. Step 2: Fallback to UUID if slug lookup fails
+  // 3. Step 2: Fallback to UUID if slug lookup fails (Retaining matching guardrails)
   if (!vendor && this.isValidUUID(identifier)) {
-    vendor = await this.prisma.vendor.findUnique({
-      where: { id: identifier },
+    vendor = await this.prisma.vendor.findFirst({
+      where: { 
+        id: identifier,
+        isVerified: true,
+        isBlacklisted: false,
+        slug: { not: '' }
+      },
       select: vendorSelection,
     });
   }
 
   // 4. Step 3: Final Registry Check
+  // If the record doesn't exist OR was caught by security filters, it safely drops here
   if (!vendor) {
-    throw new NotFoundException('Vendor_Registry_Node_Null');
+    throw new NotFoundException('Vendor_Registry_Node_Null_Or_Suspended');
   }
 
   return vendor;
@@ -230,6 +243,8 @@ private isValidUUID(str: string): boolean {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(str);
 }
+
+
 async getAllVendors(searchTerm?: string) {
   return this.prisma.vendor.findMany({
     where: { 
