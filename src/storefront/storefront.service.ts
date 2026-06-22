@@ -176,6 +176,47 @@ this.prisma.vendor.findMany({
 // backend: src/storefront/storefront.service.ts
 
 // backend: src/storefront/storefront.service.ts
+async getAllVendors(searchTerm?: string) {
+  return this.prisma.vendor.findMany({
+    where: { 
+      // 🛡️ SECURITY & CONFIGURATION GUARDRAILS
+      status: VendorStatus.ACTIVE,
+      isVerified: true,
+      NOT: {
+        slug: '' // Exclude unconfigured storefront nodes
+      },
+
+      // 📦 AUTOMATIC ZERO-PRODUCT EXCLUSION ENGINE
+      // Only returns vendors who have at least ONE approved, live product
+      products: {
+        some: {
+          status: ProductStatus.APPROVED,
+          isDeleted: false,
+          isActive: true,
+        },
+      },
+
+      // 🔍 MULTI-FIELD SEARCH MATRIX
+      ...(searchTerm && {
+        OR: [
+          { storeName: { contains: searchTerm, mode: 'insensitive' } },
+          { description: { contains: searchTerm, mode: 'insensitive' } },
+        ],
+      }),
+    },
+    select: {
+      id: true,
+      storeName: true,
+      slug: true, // 🚀 Keeps the "Popular Vendors" list fix
+      description: true,
+      imageUrl: true,
+      _count: { select: { products: true, followers: true } }
+    },
+    orderBy: {
+      storeName: 'asc',
+    },
+  });
+}
 
 async getVendorStorefront(identifier: string) {
   // 1. Centralize the data selection to avoid duplication
@@ -186,51 +227,64 @@ async getVendorStorefront(identifier: string) {
     description: true,
     imageUrl: true,
     isVerified: true,
-    status: true, // Pull status field safely for secondary logic evaluation
     _count: { select: { followers: true, products: true } },
     products: {
       where: { 
         status: ProductStatus.APPROVED, 
         isDeleted: false,
-        isActive: true // Ensure only live products show
+        isActive: true // Ensure only live products show inside their profile
       },
       include: this.productIncludes,
       orderBy: { createdAt: 'desc' as const },
     },
   };
 
-  // 2. Step 1: Case-Insensitive Slug Lookup with Strict Security Guardrails
+  // 2. Step 1: Case-Insensitive Slug Lookup with Security + Zero-Product Guardrails
   let vendor = await this.prisma.vendor.findFirst({
     where: { 
       slug: { 
         equals: identifier, 
-        mode: 'insensitive' 
+        mode: 'insensitive' // 🚀 FIX: Handles havenstore vs Havenstore
       },
-      isVerified: true,             // Blocks unverified profiles from parsing
-      status: VendorStatus.ACTIVE,   // Enforces active status (Drops SUSPENDED & PENDING_APPROVAL)
-      NOT: {
-        slug: ''                    // Guards against unconfigured layout bugs
+      status: VendorStatus.ACTIVE,
+      isVerified: true,
+      NOT: { slug: '' },
+      // 🛡️ Prevent deep-linking if they clear down to 0 live products
+      products: {
+        some: {
+          status: ProductStatus.APPROVED,
+          isDeleted: false,
+          isActive: true
+        }
       }
     },
     select: vendorSelection,
   });
 
-  // 3. Step 2: Fallback to UUID if slug lookup fails (Retaining matching guardrails)
+  // 3. Step 2: Fallback to UUID if slug lookup fails (Maintaining matching guardrails)
   if (!vendor && this.isValidUUID(identifier)) {
     vendor = await this.prisma.vendor.findFirst({
       where: { 
         id: identifier,
+        status: VendorStatus.ACTIVE,
         isVerified: true,
-        status: VendorStatus.ACTIVE, // Enforces active status on fallback lookups
-        slug: { not: '' }
+        slug: { not: '' },
+        // 🛡️ Prevent deep-linking if they clear down to 0 live products
+        products: {
+          some: {
+            status: ProductStatus.APPROVED,
+            isDeleted: false,
+            isActive: true
+          }
+        }
       },
       select: vendorSelection,
     });
   }
 
-  // 4. Step 3: Final Registry Validation Check
+  // 4. Step 3: Final Registry Check
   if (!vendor) {
-    throw new NotFoundException('Vendor_Registry_Node_Null_Or_Suspended');
+    throw new NotFoundException('Vendor_Registry_Node_Null_Or_Empty');
   }
 
   return vendor;
@@ -239,26 +293,6 @@ async getVendorStorefront(identifier: string) {
 private isValidUUID(str: string): boolean {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(str);
-}
-
-
-async getAllVendors(searchTerm?: string) {
-  return this.prisma.vendor.findMany({
-    where: { 
-      status: VendorStatus.ACTIVE,
-      ...(searchTerm && {
-        storeName: { contains: searchTerm, mode: 'insensitive' },
-      }),
-    },
-    select: {
-      id: true,
-      storeName: true,
-      slug: true, // 🚀 ADD THIS: This fixes the "Popular Vendors" list!
-      description: true,
-      imageUrl: true,
-      _count: { select: { products: true, followers: true } }
-    }
-  });
 }
 
   /**
