@@ -67,20 +67,11 @@ async getSubcategoryWorld(
   @Param('parentSlug') parentSlug: string,
   @Param('groupSlug') groupSlug: string,
 ) {
-  // 🧼 ADVANCED PIPELINE SANITATION
-  let cleanGroupSlug = groupSlug.trim().toLowerCase();
-  const parent = parentSlug.trim().toLowerCase();
-  
-  // Strip out prefix repetitions (e.g., "fashion-womens-fashion" -> "womens-fashion")
-  if (cleanGroupSlug.startsWith(`${parent}-`)) {
-    cleanGroupSlug = cleanGroupSlug.replace(`${parent}-`, '');
-  }
-  // Strip out suffix repetitions (e.g., "men-fashion" -> "men")
-  if (cleanGroupSlug.endsWith(`-${parent}`)) {
-    cleanGroupSlug = cleanGroupSlug.replace(`-${parent}`, '');
-  }
+  // Normalize formatting without destructively dropping string words
+  const cleanParent = parentSlug.trim().toLowerCase();
+  const cleanGroup = groupSlug.trim().toLowerCase();
 
-  return await this.storefrontService.getSubcategoryWorldData(parent, cleanGroupSlug);
+  return await this.storefrontService.getSubcategoryWorldData(cleanParent, cleanGroup);
 }
   // 2️⃣ DEDICATED FULL REALM BUILDER PAGE
   // This handles: GET /api/storefront/category/fashion

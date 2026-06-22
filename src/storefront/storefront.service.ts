@@ -381,9 +381,14 @@ async getBestSellers(limit: number = 10) {
   }
 
 async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
-  // Generate programmatic permutations for full database matching coverage
-  const standardCombinedSlug = `${parentSlug}-${groupSlug}`; // e.g., "fashion-men"
-  const reverseCombinedSlug = `${groupSlug}-${parentSlug}`;   // e.g., "men-fashion"
+  // 🧠 Permutation Array Generation Matrix
+  const standardCombinedSlug = `${parentSlug}-${groupSlug}`; // e.g., "fashion-men-fashion" or "accessories-sunglasses"
+  const reverseCombinedSlug = `${groupSlug}-${parentSlug}`;   // e.g., "men-fashion-fashion"
+  
+  // Extract pure segment tokens by stripping parent components
+  const isolatedGroupToken = groupSlug.replace(`${parentSlug}-`, '').replace(`-${parentSlug}`, '');
+  const prefixCombinedSlug = `${parentSlug}-${isolatedGroupToken}`; // e.g., "fashion-men"
+  const suffixCombinedSlug = `${isolatedGroupToken}-${parentSlug}`; // e.g., "men-fashion"
 
   const currentGroup = await this.prisma.category.findFirst({
     where: {
@@ -391,9 +396,12 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
         slug: parentSlug,
       },
       OR: [
-        { slug: groupSlug },            // e.g., "men" or "sunglasses"
-        { slug: standardCombinedSlug }, // e.g., "fashion-men"
-        { slug: reverseCombinedSlug }  // e.g., "men-fashion"
+        { slug: groupSlug },            // e.g., "men-fashion", "sunglasses"
+        { slug: isolatedGroupToken },   // e.g., "men"
+        { slug: standardCombinedSlug }, // e.g., "fashion-men-fashion"
+        { slug: reverseCombinedSlug },  // e.g., "men-fashion-fashion"
+        { slug: prefixCombinedSlug },   // e.g., "fashion-men"
+        { slug: suffixCombinedSlug }    // e.g., "men-fashion"
       ],
     },
     include: {
@@ -417,7 +425,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
           category: true,
         },
       },
-      // ⚡ LEVEL 3 PRODUCTS: Highly nested structural tree (e.g., Fashion -> Men -> Shirts)
+      // ⚡ LEVEL 3 PRODUCTS: Highly nested structural tree (e.g., Fashion -> Men-Fashion -> Shirts)
       children: {
         include: {
           products: {
@@ -425,7 +433,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
               isDeleted: false,
               isActive: true,
               status: 'APPROVED',
-                },
+            },
             orderBy: { createdAt: 'desc' },
             take: 20,
             include: {
@@ -465,7 +473,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
     };
   });
 
-  // 2️⃣ Normalize products attached to deep Level 3 grandchildren (e.g., Men -> Shirts)
+  // 2️⃣ Normalize products attached to deep Level 3 grandchildren (e.g., Men-Fashion -> Shirts)
   const normalizedChildren = (currentGroup.children || []).map((child) => ({
     ...child,
     products: (child.products || []).map((p) => {
@@ -486,11 +494,10 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
   // 3️⃣ Balanced payload return for client storefront layout blocks
   return {
     ...currentGroup,
-    products: normalizedDirectProducts, 
-    children: normalizedChildren,       
+    products: normalizedDirectProducts,
+    children: normalizedChildren,
   };
 }
-
 
 async getCategoryWorldData(parentSlug: string) {
   const category = await this.prisma.category.findUnique({
