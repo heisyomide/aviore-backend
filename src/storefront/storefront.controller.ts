@@ -63,18 +63,25 @@ async getCampaigns() {
   }
 
 @Get('category/:parentSlug/:groupSlug')
-  async getSubcategoryWorld(
-    @Param('parentSlug') parentSlug: string,
-    @Param('groupSlug') groupSlug: string,
-  ) {
-    // 🧼 SANITATION: If the frontend sends "fashion-women-fashion", strip "fashion-" out
-    const cleanGroupSlug = groupSlug.startsWith(`${parentSlug}-`)
-      ? groupSlug.replace(`${parentSlug}-`, '')
-      : groupSlug;
-
-    return await this.storefrontService.getSubcategoryWorldData(parentSlug, cleanGroupSlug);
+async getSubcategoryWorld(
+  @Param('parentSlug') parentSlug: string,
+  @Param('groupSlug') groupSlug: string,
+) {
+  // 🧼 ADVANCED PIPELINE SANITATION
+  let cleanGroupSlug = groupSlug.trim().toLowerCase();
+  const parent = parentSlug.trim().toLowerCase();
+  
+  // Strip out prefix repetitions (e.g., "fashion-womens-fashion" -> "womens-fashion")
+  if (cleanGroupSlug.startsWith(`${parent}-`)) {
+    cleanGroupSlug = cleanGroupSlug.replace(`${parent}-`, '');
+  }
+  // Strip out suffix repetitions (e.g., "men-fashion" -> "men")
+  if (cleanGroupSlug.endsWith(`-${parent}`)) {
+    cleanGroupSlug = cleanGroupSlug.replace(`-${parent}`, '');
   }
 
+  return await this.storefrontService.getSubcategoryWorldData(parent, cleanGroupSlug);
+}
   // 2️⃣ DEDICATED FULL REALM BUILDER PAGE
   // This handles: GET /api/storefront/category/fashion
   @Get('category/:parentSlug')

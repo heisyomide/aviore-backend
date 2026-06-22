@@ -381,23 +381,23 @@ async getBestSellers(limit: number = 10) {
   }
 
 async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
-  // 🧼 Handle matching variants for slugs cleanly (e.g., "accessories-sunglasses" or just "sunglasses")
-  const exactDbSlug = groupSlug.includes(parentSlug) 
-    ? groupSlug 
-    : `${parentSlug}-${groupSlug}`;
+  // Generate programmatic permutations for full database matching coverage
+  const standardCombinedSlug = `${parentSlug}-${groupSlug}`; // e.g., "fashion-men"
+  const reverseCombinedSlug = `${groupSlug}-${parentSlug}`;   // e.g., "men-fashion"
 
   const currentGroup = await this.prisma.category.findFirst({
     where: {
-      OR: [
-        { slug: exactDbSlug },
-        { slug: groupSlug }
-      ],
       parent: {
         slug: parentSlug,
       },
+      OR: [
+        { slug: groupSlug },            // e.g., "men" or "sunglasses"
+        { slug: standardCombinedSlug }, // e.g., "fashion-men"
+        { slug: reverseCombinedSlug }  // e.g., "men-fashion"
+      ],
     },
     include: {
-      // 💡 LEVEL 2 PRODUCTS: Pull products attached directly to this subcategory (e.g. Accessories -> Sunglasses)
+      // ⚡ LEVEL 2 PRODUCTS: Flat tree structure fallback (e.g., Accessories -> Sunglasses)
       products: {
         where: {
           isDeleted: false,
@@ -417,7 +417,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
           category: true,
         },
       },
-      // LEVEL 3 PRODUCTS: Pull products attached to grandchildren (e.g. Fashion -> Women's Fashion -> Bags)
+      // ⚡ LEVEL 3 PRODUCTS: Highly nested structural tree (e.g., Fashion -> Men -> Shirts)
       children: {
         include: {
           products: {
@@ -425,7 +425,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
               isDeleted: false,
               isActive: true,
               status: 'APPROVED',
-            },
+                },
             orderBy: { createdAt: 'desc' },
             take: 20,
             include: {
@@ -450,7 +450,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
     );
   }
 
-  // 1️⃣ Normalize products attached directly to the Subcategory (Flat Tree Level 2 - e.g. Sunglasses)
+  // 1️⃣ Normalize products attached directly to Level 2 (e.g., Sunglasses)
   const normalizedDirectProducts = (currentGroup.products || []).map((p) => {
     const variantPrices = p.variants?.map((v) => Number(v.price) || 0).filter(Boolean) || [];
     const displayPrice = variantPrices.length > 0 ? Math.min(...variantPrices) : Number(p.price) || 0;
@@ -465,7 +465,7 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
     };
   });
 
-  // 2️⃣ Normalize products attached to Grandchildren (Deep Tree Level 3 - e.g. Women's Fashion -> Bags)
+  // 2️⃣ Normalize products attached to deep Level 3 grandchildren (e.g., Men -> Shirts)
   const normalizedChildren = (currentGroup.children || []).map((child) => ({
     ...child,
     products: (child.products || []).map((p) => {
@@ -483,13 +483,15 @@ async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
     }),
   }));
 
-  // 3️⃣ Structural Matrix Balance Response
+  // 3️⃣ Balanced payload return for client storefront layout blocks
   return {
     ...currentGroup,
-    products: normalizedDirectProducts, // Readily available for single-tier grid components on frontend
-    children: normalizedChildren,       // Available for tiered layout lane mappings
+    products: normalizedDirectProducts, 
+    children: normalizedChildren,       
   };
 }
+
+
 async getCategoryWorldData(parentSlug: string) {
   const category = await this.prisma.category.findUnique({
     where: {
