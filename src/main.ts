@@ -51,18 +51,22 @@ async function bootstrap() {
   // ==========================================
   // 🚀 INITIALIZATIONS & GLOBAL CONFIG
   // ==========================================
+// ==========================================
+  // 🚀 INITIALIZATIONS & GLOBAL CONFIG
+  // ==========================================
   initializeFirebase();
 
   // Parse cookies before route handlers execute
   app.use(cookieParser());
 
-  // Trust upstream reverse proxies (like Render's Load Balancer) to properly parse secure HTTPS cookies
+  // Trust upstream reverse proxies (like Render's Load Balancer)
   app.set('trust proxy', 1);
 
-  // Secure app with automated HTTP headers via Helmet
+  // SECURE WITH HELMET - BUT CLEAR OVERRIDE RESOURCE SETTINGS FOR CORS HANDSHAKES
   app.use(
     helmet({
-      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginResourcePolicy: false, // 👈 CRITICAL: Disable this so it stops stripping headers on preflight fetches
+      crossOriginOpenerPolicy: false,
     }),
   );
 
@@ -77,12 +81,23 @@ async function bootstrap() {
   ].filter(Boolean);
 
   app.enableCors({
-    origin: origins,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or Postman)
+      if (!origin) return callback(null, true);
+      
+      const isLocalhost = origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:');
+      const isAllowed = origins.includes(origin);
+
+      if (isLocalhost || isAllowed) {
+        callback(null, true);
+      } else {
+        callback(new Error('Blocked by AVIORÈ Security Vault Gateway (CORS)'));
+      }
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: 'Content-Type, Accept, Authorization, X-Requested-With',
   });
-
   // ==========================================
   // 🛡️ API PREFIX & HEALTH CHECK PARSING
   // ==========================================
