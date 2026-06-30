@@ -10,6 +10,11 @@ export class StorefrontProductsQueryDto {
   category?: string;
 
   @IsOptional()
+  @IsString()
+  page?: string; // 💡 Add this field to register pagination indices safely
+
+
+  @IsOptional()
   @IsNumberString()
   maxPrice?: string;
 

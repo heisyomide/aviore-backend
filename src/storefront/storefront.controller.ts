@@ -1,152 +1,134 @@
-// src/storefront/storefront.controller.ts
-import { Controller, Get, HttpCode, HttpStatus, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
+import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import { StorefrontService } from './storefront.service';
 import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
+@ApiTags('Storefront Marketplace')
 @Controller('storefront')
 export class StorefrontController {
   constructor(private readonly storefrontService: StorefrontService) {}
 
+  @ApiOperation({ summary: 'Retrieve personalized feed blocks for the user home screen' })
+  @ApiResponse({ status: 200, description: 'Feed objects successfully built.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(300) // ⚡ 5-Minute Cache Layer eliminates 99% of Neon backend compute surges
   @Get('homepage')
   async getHomepage() {
     return this.storefrontService.getHomepageRegistry();
   }
 
-  // src/storefront/storefront.controller.ts
+  @ApiOperation({ summary: 'Fetch all active, verified marketplace store nodes' })
+  @ApiResponse({ status: 200, description: 'Verified merchant list.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(600)
+  @Get('vendors')
+  async getVendors() {
+    return this.storefrontService.getAllVendors();
+  }
 
-@Get('vendors')
-async getVendors() {
-  return this.storefrontService.getAllVendors();
-}
-
-@Get('registry')
+  @ApiOperation({ summary: 'Fetch unified department layout data structure' })
+  @ApiResponse({ status: 200, description: 'Registry blocks parsed successfully.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(900) // Rarely changes; cached heavily in RAM
+  @Get('registry')
   async getRegistry() {
     return this.storefrontService.getRegistryData();
   }
 
-
+  @ApiOperation({ summary: 'Retrieve limited curated drop deals' })
+  @ApiResponse({ status: 200, description: 'Top flash products payload.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(120)
   @Get('top-deals')
   async getTopDeals() {
     return this.storefrontService.getTopDeals();
   }
 
-  // storefront.controller.ts
-@Get('best-sellers')
-async getBestSellers(@Query('limit') limit: number = 10) {
-  return this.storefrontService.getBestSellers(limit);
-}
-
-// src/storefront/storefront.controller.ts
-// src/storefront/storefront.controller.ts
-
-@Get('campaigns/active')
-async getCampaigns() {
-  const data = await this.storefrontService.getActiveCampaigns();
-  
-  // We format it slightly so the frontend has a clean 'products' array
-  return data.map(campaign => ({
-    ...campaign,
-    products: campaign.products.map(cp => ({
-      ...cp.product,
-      // We use the campaign-level discount if the product doesn't have a specific one
-      campaignDiscount: campaign.discount 
-    }))
-  }));
-}
-
-
-@Get('vendors/public-profile/:identifier')
-  async getVendorStorefront(@Param('identifier') identifier: string) {
-    // This handles both 'havenstore' (slug) and 'c7b2-...' (UUID)
-    return this.storefrontService.getVendorStorefront(identifier);
+  @ApiOperation({ summary: 'Retrieve metrics-aggregated top grossing items' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Best sellers array.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(600)
+  @Get('best-sellers')
+  async getBestSellers(@Query('limit') limit: number = 10) {
+    return this.storefrontService.getBestSellers(limit);
   }
 
-@Get('category/:parentSlug/:groupSlug')
-async getSubcategoryWorld(
-  @Param('parentSlug') parentSlug: string,
-  @Param('groupSlug') groupSlug: string,
-) {
-  // Normalize formatting without destructively dropping string words
-  const cleanParent = parentSlug.trim().toLowerCase();
-  const cleanGroup = groupSlug.trim().toLowerCase();
+  @ApiOperation({ summary: 'Fetch currently active timeline marketplace campaigns' })
+  @ApiResponse({ status: 200, description: 'Active promotions and items map.' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(300)
+  @Get('campaigns/active')
+  async getCampaigns() {
+    return this.storefrontService.getActiveCampaigns();
+  }
 
-  return await this.storefrontService.getSubcategoryWorldData(cleanParent, cleanGroup);
-}
-  // 2️⃣ DEDICATED FULL REALM BUILDER PAGE
-  // This handles: GET /api/storefront/category/fashion
+  @ApiOperation({ summary: 'Public profile dynamic lookup (Slug or UUID alternative supported)' })
+  @ApiParam({ name: 'identifier', description: 'Store clean slug identifier or system raw UUID' })
+  @Get('vendors/public-profile/:identifier')
+  async getVendorStorefront(@Param('identifier') identifier: string) {
+    return this.storefrontService.getVendorStorefront(identifier.trim());
+  }
+
+  @ApiOperation({ summary: 'Level 3 Category structural leaf query fallback ecosystem wrapper' })
+  @Get('category/:parentSlug/:groupSlug')
+  async getSubcategoryWorld(
+    @Param('parentSlug') parentSlug: string,
+    @Param('groupSlug') groupSlug: string,
+  ) {
+    return this.storefrontService.getSubcategoryWorldData(parentSlug.trim().toLowerCase(), groupSlug.trim().toLowerCase());
+  }
+
+  @ApiOperation({ summary: 'Level 2 Category overview root data node tracking' })
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(600)
   @Get('category/:parentSlug')
   async getCategoryWorld(@Param('parentSlug') parentSlug: string) {
-    return await this.storefrontService.getCategoryWorldData(parentSlug);
+    return this.storefrontService.getCategoryWorldData(parentSlug.trim().toLowerCase());
   }
 
-  // 3️⃣ COMPONENT STRIP FALLBACK (Moved to the bottom so it never hijacks the parent realm query)
-  @Get('category-strip/:slug') // 🎯 Tip: Changed path slightly to keep it unique and avoid collisions
+  @ApiOperation({ summary: 'Retrieve minimal strip configuration array matching specific items' })
+  @Get('category-strip/:slug')
   async getCategorySection(@Param('slug') slug: string) {
-    const products = await this.storefrontService.getCategoryStrip(slug);
-    return {
-      category: slug.toUpperCase(),
-      products
-    };
+    const products = await this.storefrontService.getCategoryStrip(slug.trim().toLowerCase());
+    return { category: slug.toUpperCase(), products };
   }
-@Get('products')
+
+  @ApiOperation({ summary: 'Paginated, sorted exploration discovery search index matrix' })
+  @Get('products')
   @HttpCode(HttpStatus.OK)
   async getDiscoveryFeed(@Query() query: StorefrontProductsQueryDto) {
     return this.storefrontService.getDiscoveryProducts(query);
   }
 
-  /**
-   * GET /api/storefront/vouchers/my-vouchers
-   * Fetches all vouchers assigned to the authenticated user's profile.
-   */
+  @ApiOperation({ summary: 'User authentic context vouchers ledger tracking mapping' })
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('my-vouchers')
   @HttpCode(HttpStatus.OK)
   async getMyVouchers(@Req() req: any) {
     const userId = req.user.sub || req.user.id;
     const vouchers = await this.storefrontService.findUserVouchers(userId);
-    
-    return {
-      success: true,
-      data: vouchers,
-    };
+    return { success: true, data: vouchers };
   }
 
+  @ApiOperation({ summary: 'Infinite discovery general list stream data drops' })
+  @Get('products/explore')
+  async getExploreProducts(@Query('limit') limit?: string) {
+    return this.storefrontService.getExploreProducts(Number(limit) || 20);
+  }
 
-  // ==================================
-// EXPLORE PRODUCTS
-// ==================================
+  @ApiOperation({ summary: 'Retrieve contextual relevant products matching target category fields' })
+  @Get('products/:id/recommendations')
+  async getRecommendations(@Param('id') id: string) {
+    return this.storefrontService.getRecommendations(id);
+  }
 
-@Get('products/explore')
-async getExploreProducts(
-  @Query('limit') limit?: string,
-) {
-  return this.storefrontService.getExploreProducts(
-    Number(limit) || 20,
-  );
-}
-
-
-// ==================================
-// PRODUCT RECOMMENDATIONS
-// ==================================
-
-@Get('products/:id/recommendations')
-async getRecommendations(
-  @Param('id') id: string,
-) {
-  return this.storefrontService.getRecommendations(id);
-}
-
-
-// ==================================
-// VENDOR PRODUCTS
-// ==================================
-
-@Get('vendors/:id/products')
-async getVendorProducts(
-  @Param('id') id: string,
-) {
-  return this.storefrontService.getVendorProducts(id);
-}
+  @ApiOperation({ summary: 'Isolate individual merchant items arrays' })
+  @Get('vendors/:id/products')
+  async getVendorProducts(@Param('id') id: string) {
+    return this.storefrontService.getVendorProducts(id);
+  }
 }

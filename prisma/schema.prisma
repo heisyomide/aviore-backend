@@ -12,6 +12,8 @@ model User {
   email                  String               @unique
   password               String
   firstName              String?
+  middleName             String?
+  dob                    DateTime  // Added database column (or String if you prefer unparsed text)
   lastName               String?
   phone                  String?
   isActive               Boolean              @default(true)
