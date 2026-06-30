@@ -36,7 +36,7 @@ export class RegisterDto {
 
   @IsDateString({}, { message: 'Please provide a valid ISO date of birth string' })
   @IsNotEmpty({ message: 'Date of birth is required' })
-  dob!: string;
+  dob?: string;
 
   @IsOptional()
   @IsEnum(UserRole, { message: 'Role must be either CUSTOMER or VENDOR' })

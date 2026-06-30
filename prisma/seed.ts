@@ -213,7 +213,8 @@ async function main() {
           role: 'VENDOR',
           firstName: 'Avicore',
           lastName: 'Official',
-          referralCode: 'AVR-SEED1'
+          referralCode: 'AVR-SEED1',
+          dob: new Date('1995-01-01')
         },
       });
 

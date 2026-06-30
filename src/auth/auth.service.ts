@@ -56,175 +56,179 @@ return {
 
 
 async register(registerDto: RegisterDto) {
-    const {
-      email,
-      password,
-      role,
-      firstName,
-      lastName,
-      storeName,
-      referralCode,
-      ipAddress,
-      deviceFingerprint,
-    } = registerDto;
+  const {
+    email,
+    password,
+    role,
+    firstName,
+    lastName,
+    storeName,
+    referralCode,
+    ipAddress,
+    deviceFingerprint,
+    dob, // ⚡ FIX: Make sure to extract 'dob' from registerDto here!
+  } = registerDto;
 
-    console.log('==========================');
-    console.log('REGISTER REQUEST RECEIVED');
-    console.log('EMAIL:', email);
-    console.log('REFERRAL CODE:', referralCode);
-    console.log('ROLE:', role);
-    console.log('IP:', ipAddress);
-    console.log('FINGERPRINT:', deviceFingerprint);
-    console.log('==========================');
+  console.log('==========================');
+  console.log('REGISTER REQUEST RECEIVED');
+  console.log('EMAIL:', email);
+  console.log('REFERRAL CODE:', referralCode);
+  console.log('ROLE:', role);
+  console.log('IP:', ipAddress);
+  console.log('FINGERPRINT:', deviceFingerprint);
+  console.log('==========================');
 
-    const normalizedEmail = email.toLowerCase().trim();
+  const normalizedEmail = email.toLowerCase().trim();
 
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: normalizedEmail },
+  const existingUser = await this.prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
+
+  if (existingUser) {
+    throw new ConflictException(
+      'An account with this email already exists',
+    );
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const generatedReferralCode =
+    this.referralService.generateSecureReferralCode();
+
+  // Variable to track the marketer relation mapping if this is a vendor account
+  let connectedMarketerId: string | null = null;
+
+  // Verify if an affiliate team node match exists for incoming vendors
+  if (role === UserRole.VENDOR && referralCode) {
+    const activeMarketerNode = await this.prisma.marketer.findFirst({
+      where: {
+        teamCode: referralCode.trim().toUpperCase(),
+        status: 'ACTIVE',
+      },
     });
 
-    if (existingUser) {
-      throw new ConflictException(
-        'An account with this email already exists',
-      );
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    const generatedReferralCode =
-      this.referralService.generateSecureReferralCode();
-
-    // Variable to track the marketer relation mapping if this is a vendor account
-    let connectedMarketerId: string | null = null;
-
-    // Verify if an affiliate team node match exists for incoming vendors
-    if (role === UserRole.VENDOR && referralCode) {
-      const activeMarketerNode = await this.prisma.marketer.findFirst({
-        where: {
-          teamCode: referralCode.trim().toUpperCase(),
-          status: 'ACTIVE',
-        },
-      });
-
-      if (activeMarketerNode) {
-        connectedMarketerId = activeMarketerNode.id;
-        console.log(`AFFILIATE ROUTE MATCHED: Connecting Vendor to Marketer ID ${connectedMarketerId}`);
-      } else {
-        console.log(`WARNING: Referral code '${referralCode}' passed but no active Marketer match found.`);
-      }
-    }
-
-    try {
-      const newUser = await this.prisma.user.create({
-        data: {
-          email: normalizedEmail,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          role: role || UserRole.CUSTOMER,
-
-          referralCode: generatedReferralCode,
-
-          signupIp: ipAddress || null,
-          deviceFingerprint: deviceFingerprint || null,
-
-          ...(role === UserRole.VENDOR && {
-            vendor: {
-              create: {
-                storeName:
-                  storeName ||
-                  (firstName
-                    ? `${firstName}'s Shop`
-                    : normalizedEmail.split('@')[0]),
-                
-                // If a marketer node was found, hook up the nested relational database connection link
-                ...(connectedMarketerId && {
-                  marketer: {
-                    connect: { id: connectedMarketerId }
-                  }
-                }),
-
-                vendorWallet: {
-                  create: {},
-                },
-              },
-            },
-          }),
-        },
-
-        include: {
-          vendor: true,
-        },
-      });
-
-      console.log(
-        'NEW USER CREATED:',
-        newUser.id,
-      );
-
-      // Standard user-to-user customer referrals process (remains untouched)
-      if (
-        referralCode &&
-        role !== UserRole.VENDOR
-      ) {
-        console.log(
-          'STARTING CLIENT REFERRAL PROCESS:',
-          referralCode,
-        );
-
-        await this.referralService.handleUserSignupReferral(
-          newUser.id,
-          referralCode,
-          ipAddress || '',
-          deviceFingerprint || null,
-        );
-
-        console.log(
-          'REFERRAL PROCESS COMPLETED',
-        );
-      } else {
-        console.log(
-          'AFFILIATE OR CLEAN ACCOUNT DETECTED. BYPASSING CUSTOMER REFERRAL GENERATION.',
-        );
-      }
-
-      this.mailService
-        .sendWelcomeEmail(newUser.email, {
-          name:
-            newUser.firstName || 'User',
-          role: newUser.role,
-        })
-        .catch((err) => {
-          console.error(
-            'MAIL ERROR:',
-            err.message,
-          );
-        });
-
-      return newUser;
-    } catch (error: any) {
-      console.error(
-        'REGISTER ERROR:',
-        error,
-      );
-
-      if (error.code === 'P2002') {
-        throw new ConflictException(
-          'This store name or unique constraint identifier is already taken.',
-        );
-      }
-
-      if (
-        error instanceof BadRequestException
-      ) {
-        throw error;
-      }
-
-      throw new InternalServerErrorException(
-        'Registration pipeline failure. Please try again.',
-      );
+    if (activeMarketerNode) {
+      connectedMarketerId = activeMarketerNode.id;
+      console.log(`AFFILIATE ROUTE MATCHED: Connecting Vendor to Marketer ID ${connectedMarketerId}`);
+    } else {
+      console.log(`WARNING: Referral code '${referralCode}' passed but no active Marketer match found.`);
     }
   }
+
+  try {
+    const newUser = await this.prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        password: hashedPassword,
+        firstName,
+        lastName,
+        role: role || UserRole.CUSTOMER,
+
+        referralCode: generatedReferralCode,
+        
+        // ⚡ FIX: Swapped 'dto.dob' to the correct in-scope 'dob' reference variable
+        dob: dob ? new Date(dob) : new Date('2000-01-01'),
+
+        signupIp: ipAddress || null,
+        deviceFingerprint: deviceFingerprint || null,
+
+        ...(role === UserRole.VENDOR && {
+          vendor: {
+            create: {
+              storeName:
+                storeName ||
+                (firstName
+                  ? `${firstName}'s Shop`
+                  : normalizedEmail.split('@')[0]),
+              
+              // If a marketer node was found, hook up the nested relational database connection link
+              ...(connectedMarketerId && {
+                marketer: {
+                  connect: { id: connectedMarketerId }
+                }
+              }),
+
+              vendorWallet: {
+                create: {},
+              },
+            },
+          },
+        }),
+      },
+
+      include: {
+        vendor: true,
+      },
+    });
+
+    console.log(
+      'NEW USER CREATED:',
+      newUser.id,
+    );
+
+    // Standard user-to-user customer referrals process (remains untouched)
+    if (
+      referralCode &&
+      role !== UserRole.VENDOR
+    ) {
+      console.log(
+        'STARTING CLIENT REFERRAL PROCESS:',
+        referralCode,
+      );
+
+      await this.referralService.handleUserSignupReferral(
+        newUser.id,
+        referralCode,
+        ipAddress || '',
+        deviceFingerprint || null,
+      );
+
+      console.log(
+        'REFERRAL PROCESS COMPLETED',
+      );
+    } else {
+      console.log(
+        'AFFILIATE OR CLEAN ACCOUNT DETECTED. BYPASSING CUSTOMER REFERRAL GENERATION.',
+      );
+    }
+
+    this.mailService
+      .sendWelcomeEmail(newUser.email, {
+        name:
+          newUser.firstName || 'User',
+        role: newUser.role,
+      })
+      .catch((err) => {
+        console.error(
+          'MAIL ERROR:',
+          err.message,
+          );
+      });
+
+    return newUser;
+  } catch (error: any) {
+    console.error(
+      'REGISTER ERROR:',
+      error,
+    );
+
+    if (error.code === 'P2002') {
+      throw new ConflictException(
+        'This store name or unique constraint identifier is already taken.',
+      );
+    }
+
+    if (
+      error instanceof BadRequestException
+    ) {
+      throw error;
+    }
+
+    throw new InternalServerErrorException(
+      'Registration pipeline failure. Please try again.',
+    );
+  }
+}
 // src/auth/auth.service.ts
 
 

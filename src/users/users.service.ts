@@ -15,29 +15,31 @@ private completionService: CompletionService,
 
   // --- IDENTITY LOGIC ---
 async createUser(
-    email: string, 
-    pass: string, 
-    role: 'ADMIN' | 'VENDOR' | 'CUSTOMER',
-    ipAddress?: string,
-    deviceFingerprint?: string
-  ) {
-    const hashedPassword = await bcrypt.hash(pass, 12);
+  email: string, 
+  pass: string, 
+  role: 'ADMIN' | 'VENDOR' | 'CUSTOMER',
+  ipAddress?: string,
+  deviceFingerprint?: string,
+  dob?: string // ⚡ FIX: Added optional dob parameter to the function signature
+) {
+  const hashedPassword = await bcrypt.hash(pass, 12);
 
-    // 🚀 THE CRITICAL FIX: Generate unique unguessable code on creation to satisfy structural schema flags
-    const generatedReferralCode = `AVR-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  // 🚀 THE CRITICAL FIX: Generate unique unguessable code on creation to satisfy structural schema flags
+  const generatedReferralCode = `AVR-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-    return this.prisma.user.create({
-      data: { 
-        email, 
-        password: hashedPassword, 
-        role,
-        referralCode: generatedReferralCode, // 👈 Satisfies your XOR UserCreateInput requirement
-        signupIp: ipAddress || null,
-        deviceFingerprint: deviceFingerprint || null
-      },
-    });
-  }
-
+  return this.prisma.user.create({
+    data: { 
+      email, 
+      password: hashedPassword, 
+      role,
+      referralCode: generatedReferralCode, // 👈 Satisfies your XOR UserCreateInput requirement
+      signupIp: ipAddress || null,
+      // ⚡ FIX: Use the 'dob' variable passed directly to the function arguments
+      dob: dob ? new Date(dob) : new Date('2000-01-01'),
+      deviceFingerprint: deviceFingerprint || null
+    },
+  });
+}
   async findByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email } });
   }
