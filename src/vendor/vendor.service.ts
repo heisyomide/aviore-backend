@@ -8,12 +8,15 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
-import { v2 as cloudinary } from 'cloudinary';
 import { Readable } from 'stream';
 import { VendorCreateProductDto  } from './dto/vendor-product.dto';
 import { OrderStatus, Prisma, ProductStatus } from '@prisma/client'; // Import the auto-generated enum
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'; 
 import { Roles } from '../auth/roles.decorator';
+// Replace your old cloudinary import with this:
+import { v2 as cloudinary } from 'cloudinary';
+import * as crypto from 'crypto';
+import * as Tesseract from 'tesseract.js';
 import { NotificationService } from '../notification/notification.service';
 
 
@@ -22,6 +25,63 @@ export class VendorService {
   private readonly logger = new Logger(VendorService.name);
   createProduct(vendorId: any, dto: VendorCreateProductDto , file: Express.Multer.File) {
     throw new Error('Method not implemented.');
+  }
+
+private encryptIdNumber(idNumber: string): string {
+    const secretKey = process.env.KYC_ENCRYPTION_KEY;
+    if (!secretKey || secretKey.length !== 32) {
+      throw new Error('Critical: KYC_ENCRYPTION_KEY must be exactly 32 characters long in your .env file');
+    }
+    
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(secretKey), iv);
+    
+    let encrypted = cipher.update(idNumber.trim().toUpperCase(), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    const authTag = cipher.getAuthTag().toString('hex');
+    
+    // Returns compound colon-separated crypt string (IV:AuthTag:Ciphertext)
+    return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+  }
+
+  /**
+   * 🔑 ADMIN UTILITY METHOD - REVERSE ID TEXT DECRYPTION
+   * Decrypts the database text value back to a plaintext string for compliance auditing.
+   */
+  decryptIdNumber(encryptedData: string): string {
+    const secretKey = process.env.KYC_ENCRYPTION_KEY;
+    if (!secretKey) throw new Error('Encryption secret key matrix not loaded');
+
+    const [ivHex, authTagHex, encryptedHex] = encryptedData.split(':');
+    if (!ivHex || !authTagHex || !encryptedHex) {
+      return encryptedData; // Fallback context in case unencrypted data exists
+    }
+
+    const deCipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(secretKey), Buffer.from(ivHex, 'hex'));
+    deCipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+
+    let decrypted = deCipher.update(encryptedHex, 'hex', 'utf8');
+    decrypted += deCipher.final('utf8');
+    return decrypted;
+  }
+
+  /**
+   * 🔒 ADMIN UTILITY METHOD - GENERATE ACCESS URL
+   * Dynamically configures credentials to sign secure viewing instances.
+   */
+  generateSecureViewingUrl(publicId: string): string {
+    cloudinary.config({
+      cloud_name: process.env.KC_CLOUDINARY_CLOUD_NAME?.trim(),
+      api_key: process.env.KC_CLOUDINARY_API_KEY?.trim(),
+      api_secret: process.env.KC_CLOUDINARY_API_SECRET?.trim(),
+    });
+
+    return cloudinary.utils.private_download_url(publicId, 'jpg', {
+      resource_type: 'image',
+      type: 'authenticated',
+      expires_at: Math.floor(Date.now() / 1000) + 600, // Valid for exactly 10 minutes
+    });
   }
   constructor(private readonly prisma: PrismaService,
     private readonly notificationService: NotificationService
@@ -565,15 +625,15 @@ async updateFullProfile(vendorId: string, data: {
    * Submits vendor KYC with ID document upload to Cloudinary.
    * Re-configures Cloudinary right before upload to avoid lost config issues.
    */
- async submitKyc(userId: string, idType: string, idNumber: string, file: Express.Multer.File) {
+async submitKyc(userId: string, idType: string, idNumber: string, file: Express.Multer.File) {
     // 1. Structural file verification validation bounds
     if (!file?.buffer) {
       throw new BadRequestException('ID document image file is required');
     }
 
-    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestException('Only PDF or image files (JPEG, PNG, WEBP) are authorized for KYC verification');
+      throw new BadRequestException('Only image files (JPEG, PNG, WEBP) are supported for local automated scanning');
     }
 
     if (file.size > 5 * 1024 * 1024) {
@@ -590,37 +650,62 @@ async updateFullProfile(vendorId: string, data: {
     }
 
     try {
-      // ─── Environment Verification at Upload Time ─────────────
-      const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
-      const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
-      const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+      // ─── 3. LOCAL IN-BUILT OCR PROCESSING ENGINE (100% FREE) ───
+      console.log('[IN-BUILT-OCR] Processing image buffer natively in server memory...');
+      
+      const ocrResult = await Tesseract.recognize(
+        file.buffer,
+        'eng', 
+        { logger: (m) => console.log(`[OCR Node Status]: ${m.status} -> ${Math.round(m.progress * 100)}%`) }
+      );
 
-      if (!cloudName || !apiKey || !apiSecret) {
-        throw new Error('Critical Cloudinary API configuration vectors missing at instance lifecycle runtime');
+      const extractedTextBlock = ocrResult.data.text || '';
+      console.log('[IN-BUILT-OCR] Native text parsing routine complete.');
+
+      // Normalize strings to match cleanly (remove dashes, spaces, slashes, punctuation)
+      const cleanSubmittedId = idNumber.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      const cleanExtractedText = extractedTextBlock.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+
+      // ─── 4. RUN AUTONOMOUS MATCH LOGIC CHECK ───
+      let finalKycStatus: 'APPROVED' | 'REJECTED' = 'REJECTED';
+      
+      if (cleanExtractedText.includes(cleanSubmittedId) && cleanSubmittedId.length > 2) {
+        console.log(`[KYC-OCR MATCH SUCCESS] ID verified natively! Text block matches data payload.`);
+        finalKycStatus = 'APPROVED';
+      } else {
+        console.warn(`[KYC-OCR MISMATCH DETECTED] Target string missing from image parsing context output.`);
+        finalKycStatus = 'REJECTED';
       }
 
+      // Cryptographically obscure plain text before committing to DB
+      const encryptedIdString = this.encryptIdNumber(idNumber);
+
+      // ─── 5. CLOUDINARY CONFIGURATION FOR DEDICATED KYC ACCOUNT ───
+      const kycCloudName = process.env.KC_CLOUDINARY_CLOUD_NAME?.trim();
+      const kycApiKey = process.env.KC_CLOUDINARY_API_KEY?.trim();
+      const kycApiSecret = process.env.KC_CLOUDINARY_API_SECRET?.trim();
+
+      if (!kycCloudName || !kycApiKey || !kycApiSecret) {
+        throw new Error('Dedicated KYC Cloudinary credentials missing at instance lifecycle runtime');
+      }
+
+      // Reconfigure standard instance configurations with target vault variables safely
       cloudinary.config({
-        cloud_name: cloudName,
-        api_key: apiKey,
-        api_secret: apiSecret,
+        cloud_name: kycCloudName,
+        api_key: kycApiKey,
+        api_secret: kycApiSecret,
       });
 
-      // ─── 3. Upload Payload Configuration Stream ────────────────────────────────
       console.log('[KYC] Initializing upload stream to hidden repository directory path');
 
       const uploadResult = await new Promise<any>((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
           {
-            // Changes storage behavior from public read to permissioned authorization handshakes only
             type: 'authenticated', 
             access_mode: 'authenticated',
-            
-            // Structured placement path
-            folder: `aviore_vendors_kyc_vault/${vendor.id}`,
+            folder: `isolated_vendor_kyc_vault/${vendor.id}`,
             public_id: `${idType.toLowerCase()}_secure_${Date.now()}`,
-            
-            // Allows handling both images and multi-page PDFs cleanly
-            resource_type: 'auto',
+            resource_type: 'image',
             overwrite: true,
           },
           (error, result) => {
@@ -642,49 +727,34 @@ async updateFullProfile(vendorId: string, data: {
         throw new Error('Cloudinary ingestion completed successfully but omitted unique public_id tracking strings');
       }
 
-      // ─── 4. Update vendor record persistence layers ────────────────────────────────
-      // Note: We track BOTH public_id and secure_url. Use public_id to generate 
-      // temporary signed links for your internal audit administration dashboards.
+      // ─── 6. UPDATE VENDOR DATABASE RECORD ───
       const updatedVendor = await this.prisma.vendor.update({
         where: { id: vendor.id },
         data: {
           idType,
-          idNumber,
-          idImage: uploadResult.public_id, // Storing public_id is standard architecture for private storage
-          kycStatus: 'PENDING',
-          // kycSubmittedAt: new Date(),   // ← Ready for activation once added to database schema definition
+          idNumber: encryptedIdString,      
+          idImage: uploadResult.public_id,   
+          kycStatus: finalKycStatus,        
         },
       });
 
       console.log('[KYC] Success — Vendor KYC vault sealed under tracking registration identifier:', uploadResult.public_id);
 
-      return updatedVendor;
+      return {
+        vendor: updatedVendor,
+        aiVerifiedMatch: finalKycStatus === 'APPROVED'
+      };
     } catch (error) {
-      console.error('[KYC_VAULT_EXCEPTION_NODE]:', {
-        message: error instanceof Error ? error.message : String(error),
-        userId,
-        fileName: file?.originalname,
-      });
-
+      console.error('[KYC_VAULT_EXCEPTION_NODE]:', error);
+      
+      if (error instanceof BadRequestException) throw error;
+      
       throw new InternalServerErrorException(
         'An error occurred while transmitting your identity documents into the cryptographic vault. Please try again.',
       );
     }
   }
 
-  /**
-   * 🔒 ADMIN UTILITY METHOD
-   * Use this helper method inside your protected back-office administration route 
-   * to review document inputs securely without exposing public static access addresses.
-   */
-  generateSecureViewingUrl(publicId: string): string {
-    return cloudinary.utils.private_download_url(publicId, 'jpg', {
-      resource_type: 'image',
-      type: 'authenticated',
-      // Generates a link that breaks and invalidates automatically 10 minutes from now
-      expires_at: Math.floor(Date.now() / 1000) + 600, 
-    });
-  }
 
 
   //==========================================

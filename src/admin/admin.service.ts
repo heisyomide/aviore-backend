@@ -9,7 +9,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
 import { GrowthVendorsActivationService } from 'src/growth/vendors/vendors-activation.service';
 import { NotificationService } from '../notification/notification.service';
-
+import { VendorService } from '../vendor/vendor.service';
 
 
 @Injectable()
@@ -20,6 +20,7 @@ export class AdminService {
   private prisma: PrismaService,
   private paymentsService: PaymentsService,
   private readonly activationService: GrowthVendorsActivationService,
+  private readonly vendorService: VendorService,
    private readonly notificationService: NotificationService,
 
 ) {}
@@ -65,8 +66,8 @@ async getAdminDashboardOverview() {
   // =========================================================
 
 async getPendingKycVendors() {
-  return this.prisma.vendor.findMany({
-    where: { kycStatus: 'PENDING' },
+  const vendors = await this.prisma.vendor.findMany({
+    where: { kycStatus: 'PENDING' }, 
     include: {
       user: {
         select: { firstName: true, lastName: true, email: true }
@@ -74,8 +75,39 @@ async getPendingKycVendors() {
     },
     orderBy: { createdAt: 'desc' }
   });
-}
 
+  return vendors.map((vendor) => {
+    let readableIdNumber = 'Unreadable or missing data';
+    let temporalSecureImageUrl: string = ''; // Explicitly defined as a string
+
+    try {
+      if (vendor.idNumber) {
+        readableIdNumber = this.vendorService.decryptIdNumber(vendor.idNumber);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Admin-Decryption-Fail] Could not parse ID text for vendor ${vendor.id}:`, errorMsg);
+      readableIdNumber = vendor.idNumber || ''; 
+    }
+
+    try {
+      if (vendor.idImage) {
+        // 🔥 FIX: Append the ?? '' fallback handler right here. 
+        // If generateSecureViewingUrl ever outputs null, it will default to a clean, empty string safely.
+        temporalSecureImageUrl = this.vendorService.generateSecureViewingUrl(vendor.idImage) ?? '';
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Admin-Signing-Fail] Could not sign image for vendor ${vendor.id}:`, errorMsg);
+    }
+
+    return {
+      ...vendor,
+      idNumber: readableIdNumber,       
+      idImageUrl: temporalSecureImageUrl, 
+    };
+  });
+}
 async getAllVendors() {
   return this.prisma.vendor.findMany({
     include: {
@@ -91,61 +123,60 @@ async getAllVendors() {
 // src/admin/admin.service.ts
 
 async approveVendorKyc(vendorId: string, adminId: string) {
-  return this.prisma.$transaction(async (tx) => {
-    const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
-    if (!vendor) throw new NotFoundException('Node not found');
+    return this.prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
+      if (!vendor) throw new NotFoundException('Node not found');
 
-    const updated = await tx.vendor.update({
-      where: { id: vendorId },
-      data: {
-        kycStatus: 'APPROVED',
-        status: 'ACTIVE',
-        isVerified: true
-      }
+      const updated = await tx.vendor.update({
+        where: { id: vendorId },
+        data: {
+          kycStatus: 'APPROVED',
+          status: 'ACTIVE',
+          isVerified: true
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          adminId,
+          action: 'APPROVE_VENDOR_KYC',
+          targetId: vendorId,
+          targetType: 'VENDOR',
+          details: `IDENTITY_AUTHORIZED: ${vendor.storeName || 'Vendor'}`
+        }
+      });
+
+      return updated;
     });
+  }
 
-    await tx.auditLog.create({
-      data: {
-        adminId,
-        action: 'APPROVE_VENDOR_KYC',
-        targetId: vendorId,
-        targetType: 'VENDOR',
-        details: `IDENTITY_AUTHORIZED: ${vendor.storeName}`
-      }
+  async rejectVendorKyc(vendorId: string, adminId: string, reason: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
+      if (!vendor) throw new NotFoundException('Node not found');
+
+      const updated = await tx.vendor.update({
+        where: { id: vendorId },
+        data: {
+          kycStatus: 'REJECTED',
+          status: 'PENDING_APPROVAL', // Merchant must resubmit
+          isVerified: false
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          adminId,
+          action: 'REJECT_VENDOR_KYC',
+          targetId: vendorId,
+          targetType: 'VENDOR',
+          details: `IDENTITY_REJECTED: ${reason}`
+        }
+      });
+
+      return updated;
     });
-
-    return updated;
-  });
-}
-
-// THIS WAS THE MISSING METHOD CAUSING YOUR ERROR
-async rejectVendorKyc(vendorId: string, adminId: string, reason: string) {
-  return this.prisma.$transaction(async (tx) => {
-    const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
-    if (!vendor) throw new NotFoundException('Node not found');
-
-    const updated = await tx.vendor.update({
-      where: { id: vendorId },
-      data: {
-        kycStatus: 'REJECTED',
-        status: 'PENDING_APPROVAL', // Merchant must resubmit
-        isVerified: false
-      }
-    });
-
-    await tx.auditLog.create({
-      data: {
-        adminId,
-        action: 'REJECT_VENDOR_KYC',
-        targetId: vendorId,
-        targetType: 'VENDOR',
-        details: `IDENTITY_REJECTED: ${reason}`
-      }
-    });
-
-    return updated;
-  });
-}
+  }
 
 
 
