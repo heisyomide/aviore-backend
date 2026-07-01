@@ -565,43 +565,38 @@ async updateFullProfile(vendorId: string, data: {
    * Submits vendor KYC with ID document upload to Cloudinary.
    * Re-configures Cloudinary right before upload to avoid lost config issues.
    */
-  async submitKyc(userId: string, idType: string, idNumber: string, file: Express.Multer.File) {
-    // 1. File validation
+ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.Multer.File) {
+    // 1. Structural file verification validation bounds
     if (!file?.buffer) {
-      throw new BadRequestException('ID document image is required');
+      throw new BadRequestException('ID document image file is required');
     }
 
-    if (!file.mimetype.startsWith('image/')) {
-      throw new BadRequestException('Only image files are allowed (JPEG, PNG, etc.)');
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException('Only PDF or image files (JPEG, PNG, WEBP) are authorized for KYC verification');
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      throw new BadRequestException('File size exceeds 5MB limit');
+      throw new BadRequestException('File size exceeds the protective 5MB ingestion ceiling');
     }
 
-    // 2. Vendor existence check
+    // 2. Vendor existence verification
     const vendor = await this.prisma.vendor.findUnique({
       where: { userId },
     });
 
     if (!vendor) {
-      throw new NotFoundException('Vendor profile not found. Ensure your account role is VENDOR.');
+      throw new NotFoundException('Vendor profile not found. Ensure your account role status is configured as VENDOR.');
     }
 
     try {
-      // ─── Re-configure Cloudinary RIGHT BEFORE upload ─────────────
+      // ─── Environment Verification at Upload Time ─────────────
       const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
       const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
       const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
 
-      console.log('[KYC] Cloudinary env check at upload time:', {
-        cloudName: cloudName || 'MISSING',
-        apiKeyExists: !!apiKey,
-        apiSecretExists: !!apiSecret,
-      });
-
       if (!cloudName || !apiKey || !apiSecret) {
-        throw new Error('Cloudinary credentials missing at upload time');
+        throw new Error('Critical Cloudinary API configuration vectors missing at instance lifecycle runtime');
       }
 
       cloudinary.config({
@@ -610,35 +605,32 @@ async updateFullProfile(vendorId: string, data: {
         api_secret: apiSecret,
       });
 
-      console.log('[KYC] Cloudinary re-configured successfully for this request');
-
-      // ─── 3. Upload to Cloudinary ────────────────────────────────
-      console.log('[KYC] Starting upload →', {
-        userId,
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-      });
+      // ─── 3. Upload Payload Configuration Stream ────────────────────────────────
+      console.log('[KYC] Initializing upload stream to hidden repository directory path');
 
       const uploadResult = await new Promise<any>((resolve, reject) => {
         const uploadStream = cloudinary.uploader.upload_stream(
           {
-            folder: 'aviore_vendors_kyc',
-            resource_type: 'image',
-            type: 'private',
+            // Changes storage behavior from public read to permissioned authorization handshakes only
+            type: 'authenticated', 
+            access_mode: 'authenticated',
+            
+            // Structured placement path
+            folder: `aviore_vendors_kyc_vault/${vendor.id}`,
+            public_id: `${idType.toLowerCase()}_secure_${Date.now()}`,
+            
+            // Allows handling both images and multi-page PDFs cleanly
+            resource_type: 'auto',
             overwrite: true,
           },
           (error, result) => {
             if (error) {
-              console.error('[Cloudinary Upload Error]:', error);
+              console.error('[Cloudinary Enclave Upload Error]:', error);
               return reject(error);
             }
-
             if (!result) {
-              return reject(new Error('Cloudinary returned no result object'));
+              return reject(new Error('Cloudinary stream resolved without returning contextual metadata payload objects'));
             }
-
-            console.log('[Cloudinary Success] URL:', result.secure_url);
             resolve(result);
           },
         );
@@ -646,41 +638,52 @@ async updateFullProfile(vendorId: string, data: {
         Readable.from(file.buffer).pipe(uploadStream);
       });
 
-      if (!uploadResult?.secure_url) {
-        throw new Error('Cloudinary upload succeeded but no secure_url returned');
+      if (!uploadResult?.public_id) {
+        throw new Error('Cloudinary ingestion completed successfully but omitted unique public_id tracking strings');
       }
 
-      const secureUrl = uploadResult.secure_url;
-
-      // ─── 4. Update vendor record ────────────────────────────────
+      // ─── 4. Update vendor record persistence layers ────────────────────────────────
+      // Note: We track BOTH public_id and secure_url. Use public_id to generate 
+      // temporary signed links for your internal audit administration dashboards.
       const updatedVendor = await this.prisma.vendor.update({
         where: { id: vendor.id },
         data: {
           idType,
           idNumber,
-          idImage: secureUrl,
+          idImage: uploadResult.public_id, // Storing public_id is standard architecture for private storage
           kycStatus: 'PENDING',
-          // kycSubmittedAt: new Date(),   // ← Uncomment ONLY after adding this field to schema.prisma
+          // kycSubmittedAt: new Date(),   // ← Ready for activation once added to database schema definition
         },
       });
 
-      console.log('[KYC] Success — Vendor updated with image:', secureUrl);
+      console.log('[KYC] Success — Vendor KYC vault sealed under tracking registration identifier:', uploadResult.public_id);
 
       return updatedVendor;
     } catch (error) {
-      console.error('[KYC_UPLOAD_ERROR]:', {
+      console.error('[KYC_VAULT_EXCEPTION_NODE]:', {
         message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
         userId,
         fileName: file?.originalname,
-        fileSize: file?.size,
-        mimeType: file?.mimetype,
       });
 
       throw new InternalServerErrorException(
-        'An error occurred while processing your identity documents. Please try again.',
+        'An error occurred while transmitting your identity documents into the cryptographic vault. Please try again.',
       );
     }
+  }
+
+  /**
+   * 🔒 ADMIN UTILITY METHOD
+   * Use this helper method inside your protected back-office administration route 
+   * to review document inputs securely without exposing public static access addresses.
+   */
+  generateSecureViewingUrl(publicId: string): string {
+    return cloudinary.utils.private_download_url(publicId, 'jpg', {
+      resource_type: 'image',
+      type: 'authenticated',
+      // Generates a link that breaks and invalidates automatically 10 minutes from now
+      expires_at: Math.floor(Date.now() / 1000) + 600, 
+    });
   }
 
 
