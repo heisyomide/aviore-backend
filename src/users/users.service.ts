@@ -35,7 +35,7 @@ async createUser(
       referralCode: generatedReferralCode, // 👈 Satisfies your XOR UserCreateInput requirement
       signupIp: ipAddress || null,
       // ⚡ FIX: Use the 'dob' variable passed directly to the function arguments
-      dob: dob ? new Date(dob) : new Date('2000-01-01'),
+    
       deviceFingerprint: deviceFingerprint || null
     },
   });

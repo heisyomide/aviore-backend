@@ -126,8 +126,6 @@ async register(registerDto: RegisterDto) {
 
         referralCode: generatedReferralCode,
         
-        // ⚡ FIX: Swapped 'dto.dob' to the correct in-scope 'dob' reference variable
-        dob: dob ? new Date(dob) : new Date('2000-01-01'),
 
         signupIp: ipAddress || null,
         deviceFingerprint: deviceFingerprint || null,
