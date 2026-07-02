@@ -61,12 +61,14 @@ async register(registerDto: RegisterDto) {
     password,
     role,
     firstName,
+    middleName,   // 🌟 FIX: Extract middleName
     lastName,
+    phone,        // 🌟 FIX: Extract phone number
+    dob,          // 🌟 FIX: Extract dob string timestamp
     storeName,
     referralCode,
     ipAddress,
     deviceFingerprint,
-    dob, // ⚡ FIX: Make sure to extract 'dob' from registerDto here!
   } = registerDto;
 
   console.log('==========================');
@@ -121,11 +123,13 @@ async register(registerDto: RegisterDto) {
         email: normalizedEmail,
         password: hashedPassword,
         firstName,
+        middleName: middleName || null, // 🌟 FIX: Map to User Model Schema
         lastName,
+        phone: phone ? phone.trim() : null, // 🌟 FIX: Map to User Model Schema
+        dob: dob ? new Date(dob) : null, // 🌟 FIX: Convert your ISO String to native JavaScript Date Object
         role: role || UserRole.CUSTOMER,
 
         referralCode: generatedReferralCode,
-        
 
         signupIp: ipAddress || null,
         deviceFingerprint: deviceFingerprint || null,
@@ -200,14 +204,15 @@ async register(registerDto: RegisterDto) {
         console.error(
           'MAIL ERROR:',
           err.message,
-          );
+        );
       });
 
     return newUser;
   } catch (error: any) {
+    // 🌟 ENHANCEMENT: This will print the raw database error directly to your console logs so you see exactly what failed.
     console.error(
-      'REGISTER ERROR:',
-      error,
+      '❌ [CRITICAL DATABASE WRITE EXCEPTION]:',
+      error?.message || error,
     );
 
     if (error.code === 'P2002') {
@@ -223,7 +228,7 @@ async register(registerDto: RegisterDto) {
     }
 
     throw new InternalServerErrorException(
-      'Registration pipeline failure. Please try again.',
+      `Registration pipeline failure: ${error?.message || 'Database execution fault'}`,
     );
   }
 }
