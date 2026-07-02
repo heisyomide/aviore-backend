@@ -43,32 +43,37 @@ export class AuthController {
   }
 
 // --- REGISTRATION ---
-  @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  async register(@Body() registerDto: RegisterDto, @Req() req: express.Request) {
-    // Extract IP dynamically if it wasn't already explicitly provided in the request body
-    const fallbackIp = 
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || 
-      req.socket.remoteAddress || 
-      '';
+@Post('register')
+@HttpCode(HttpStatus.CREATED)
+async register(@Body() registerDto: RegisterDto, @Req() req: express.Request) {
+  // Extract IP dynamically if it wasn't already explicitly provided in the request body
+  const fallbackIp = 
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || 
+    req.socket.remoteAddress || 
+    '';
 
-    const fallbackFingerprint = (req.headers['x-device-fingerprint'] as string) || '';
+  const fallbackFingerprint = (req.headers['x-device-fingerprint'] as string) || '';
 
-    // Merge everything safely. If fields were sent in the body, keep them!
-    const userPayload = {
-      ...registerDto,
-      ipAddress: registerDto.ipAddress || fallbackIp,
-      deviceFingerprint: registerDto.deviceFingerprint || fallbackFingerprint,
-    };
+  // Merge everything safely. If fields were sent in the body, keep them!
+  const userPayload = {
+    ...registerDto,
+    ipAddress: registerDto.ipAddress || fallbackIp,
+    deviceFingerprint: registerDto.deviceFingerprint || fallbackFingerprint,
+  };
 
-    const newUser = await this.authService.register(userPayload);
+  // 1. Call the updated service which returns { user, onboardingToken }
+  const registrationResult = await this.authService.register(userPayload);
 
-    const { password: _, ...result } = newUser;
-    return {
-      message: 'User registered successfully',
-      user: result,
-    };
-  }
+  // 2. Safely extract the password from the nested user object inside registrationResult
+  const { password: _, ...sanitizedUser } = registrationResult.user;
+
+  // 3. Return the sanitized user alongside the secure onboarding token
+  return {
+    message: 'User registered successfully',
+    user: sanitizedUser,
+    onboardingToken: registrationResult.onboardingToken, // 👈 Required for your secure KYC execution!
+  };
+}
 
   // --- LOGIN ---
   @Post('login')
