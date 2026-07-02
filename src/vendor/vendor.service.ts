@@ -738,6 +738,8 @@ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.
         },
       });
 
+      
+
       console.log('[KYC] Success — Vendor KYC vault sealed under tracking registration identifier:', uploadResult.public_id);
 
       return {

@@ -10,7 +10,8 @@ import {
   ParseUUIDPipe,
   ValidationPipe,
   UsePipes,
-  Query
+  Query,
+  UnauthorizedException
 } from '@nestjs/common';
 import { FileInterceptor, } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -332,7 +333,6 @@ async requestWithdrawal(
     return this.vendorService.updateFullProfile(vendorId, updateData);
   }
 
-
 @Post('submit-kyc')
 @UseGuards(JwtAuthGuard)
 @UseInterceptors(FileInterceptor('file'))
@@ -349,10 +349,12 @@ async submitKyc(
   @Body('idNumber') idNumber: string,
   @Req() req: any,
 ) {
-  // FIX: Pull the ID, not the email. 
-  // Make sure your JwtStrategy validates and returns 'id' in the payload.
+  // 🛡️ EXTRA PROTECTION Layer: Prevent other token scopes from accessing KYC logic
+  if (req.user.purpose && req.user.purpose !== 'REGISTRATION_ONBOARDING') {
+     throw new UnauthorizedException('Invalid token scope authorization purpose.');
+  }
+
   const userId = req.user.id; 
-  
   return this.vendorService.submitKyc(userId, idType, idNumber, file);
 }
 

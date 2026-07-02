@@ -207,7 +207,22 @@ async register(registerDto: RegisterDto) {
         );
       });
 
-    return newUser;
+      // At the bottom of your register() method inside auth.service.ts, before returning:
+const registrationToken = this.jwtService.sign(
+  { 
+    sub: newUser.id, 
+    email: newUser.email,
+    purpose: 'REGISTRATION_ONBOARDING' // 👈 Scope identifier
+  },
+  { expiresIn: '5m' } // 👈 Expires quickly
+);
+
+// Return both the user data and the token
+return {
+  user: newUser,
+  onboardingToken: registrationToken,
+};
+
   } catch (error: any) {
     // 🌟 ENHANCEMENT: This will print the raw database error directly to your console logs so you see exactly what failed.
     console.error(
