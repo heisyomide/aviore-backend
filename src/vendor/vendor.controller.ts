@@ -27,6 +27,7 @@ import { ProductsService } from 'src/products/products.service';
 import { PromotionService } from 'src/coupons/promotion.service';
 import { CampaignService } from 'src/coupons/campaign.service';
 import { PromotionAnalyticsService } from 'src/coupons/analytics.service';
+import { KycApprovedGuard } from './kyc.guard';
 
 @Controller('vendor')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -54,10 +55,12 @@ async getStats(@Req() req) {
 
 @Post('products')
   @Roles('VENDOR')
+  // 🌟 FIX: Chain JwtAuthGuard, RolesGuard, and KycApprovedGuard sequentially
+  @UseGuards(JwtAuthGuard, RolesGuard, KycApprovedGuard) 
   @UseInterceptors(FileInterceptor('image')) // For product thumbnail
   async addProduct(
     @Req() req: any, 
-    @Body() dto: VendorCreateProductDto ,
+    @Body() dto: VendorCreateProductDto,
     @UploadedFile() file: Express.Multer.File
   ) {
     // req.user.vendorId comes from your VendorInterceptor
