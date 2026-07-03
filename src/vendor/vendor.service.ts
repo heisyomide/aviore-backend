@@ -650,7 +650,7 @@ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.
     }
 
     try {
-      // ─── 3. LOCAL IN-BUILT OCR PROCESSING ENGINE (100% FREE) ───
+      // ─── 3. LOCAL IN-BUILT OCR PROCESSING ENGINE ───
       console.log('[IN-BUILT-OCR] Processing image buffer natively in server memory...');
       
       const ocrResult = await Tesseract.recognize(
@@ -667,26 +667,41 @@ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.
       const cleanExtractedText = extractedTextBlock.replace(/[^A-Z0-9]/gi, '').toUpperCase();
 
       // ─── 4. RUN AUTONOMOUS MATCH LOGIC CHECK ───
-      let finalKycStatus: 'APPROVED' | 'REJECTED' = 'REJECTED';
+      // 🌟 FIX/ENHANCEMENT: Switched status to strings matching common multi-status logic ('APPROVED' | 'PENDING' | 'REJECTED')
+      let finalKycStatus: 'APPROVED' | 'PENDING' | 'REJECTED' = 'PENDING';
       
+      // 🌟 ADDED COMPREHENSIVE DEBUGGING LOG LAYOUT
+      console.log('==================================================');
+      console.log('[OCR VERIFICATION INSPECTOR]');
+      console.log('CLEAN SUBMITTED ID:', cleanSubmittedId);
+      console.log('EXTRACTED OCR TEXT FROM IMAGE:', cleanExtractedText);
+      console.log('==================================================');
+
       if (cleanExtractedText.includes(cleanSubmittedId) && cleanSubmittedId.length > 2) {
         console.log(`[KYC-OCR MATCH SUCCESS] ID verified natively! Text block matches data payload.`);
         finalKycStatus = 'APPROVED';
       } else {
-        console.warn(`[KYC-OCR MISMATCH DETECTED] Target string missing from image parsing context output.`);
-        finalKycStatus = 'REJECTED';
+        console.warn(`[KYC-OCR MISMATCH DETECTED] Target string missing from image context. Routing to manual admin verification review.`);
+        // 🌟 Instead of auto-rejecting real users over OCR typos, push them to standard PENDING review status
+        finalKycStatus = 'PENDING'; 
       }
 
       // Cryptographically obscure plain text before committing to DB
       const encryptedIdString = this.encryptIdNumber(idNumber);
 
       // ─── 5. CLOUDINARY CONFIGURATION FOR DEDICATED KYC ACCOUNT ───
+      // 🌟 ALERT: Ensure these EXACT 3 variable strings match what is inside your environment panel!
       const kycCloudName = process.env.KC_CLOUDINARY_CLOUD_NAME?.trim();
       const kycApiKey = process.env.KC_CLOUDINARY_API_KEY?.trim();
       const kycApiSecret = process.env.KC_CLOUDINARY_API_SECRET?.trim();
 
       if (!kycCloudName || !kycApiKey || !kycApiSecret) {
-        throw new Error('Dedicated KYC Cloudinary credentials missing at instance lifecycle runtime');
+        throw new Error(
+          `Dedicated KYC Cloudinary credentials missing at instance lifecycle runtime. ` +
+          `Checked keys: KC_CLOUDINARY_CLOUD_NAME (${kycCloudName ? 'OK' : 'MISSING'}), ` +
+          `KC_CLOUDINARY_API_KEY (${kycApiKey ? 'OK' : 'MISSING'}), ` +
+          `KC_CLOUDINARY_API_SECRET (${kycApiSecret ? 'OK' : 'MISSING'})`
+        );
       }
 
       // Reconfigure standard instance configurations with target vault variables safely
@@ -738,8 +753,6 @@ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.
         },
       });
 
-      
-
       console.log('[KYC] Success — Vendor KYC vault sealed under tracking registration identifier:', uploadResult.public_id);
 
       return {
@@ -752,10 +765,10 @@ async submitKyc(userId: string, idType: string, idNumber: string, file: Express.
       if (error instanceof BadRequestException) throw error;
       
       throw new InternalServerErrorException(
-        'An error occurred while transmitting your identity documents into the cryptographic vault. Please try again.',
+        error instanceof Error ? error.message : 'An error occurred while transmitting your identity documents into the cryptographic vault. Please try again.',
       );
     }
-  }
+}
 
 
 
