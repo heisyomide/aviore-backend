@@ -59,11 +59,24 @@ export class StorefrontService {
       absoluteIdList.push(...ids);
     });
 
-    // 🚀 Let PostgreSQL do the initial filtering to protect compute performance
+    // 🎲 DICE SHUFFLE UPGRADE STEP 1: Shuffle the grouped category categories
+    // Calculate total pool matching these categories to fetch a dynamic sliding window slice
+    const totalCount = await this.prisma.product.count({
+      where: { ...activeProductFilter, categoryId: { in: absoluteIdList } },
+    });
+
+    // We want a safe skip boundary ensuring we get a substantial amount of products to distribute across categories
+    const batchSize = 100; 
+    let randomSkip = 0;
+    if (totalCount > batchSize) {
+      randomSkip = Math.floor(Math.random() * (totalCount - batchSize));
+    }
+
     const [allProductsRaw, vendorsRaw] = await Promise.all([
       this.prisma.product.findMany({
         where: { ...activeProductFilter, categoryId: { in: absoluteIdList } },
-        orderBy: { createdAt: 'desc' },
+        skip: randomSkip, // 👈 Breaks static layout tracking instantly
+        take: batchSize,
         include: this.productIncludes,
       }),
       this.prisma.vendor.findMany({
@@ -76,9 +89,20 @@ export class StorefrontService {
       })
     ]);
 
+    // Memory array shuffling utility (Fisher-Yates) for an absolute random appearance mix
+    const shuffleArray = (array: any[]) => {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    };
+
+    const shuffledProductsPool = shuffleArray([...allProductsRaw]);
+
     const sections = categories.map(category => {
       const targets = categoryTreeIds[category.id] || [];
-      const filteredProducts = allProductsRaw.filter(p => targets.includes(p.categoryId)).slice(0, 10);
+      const filteredProducts = shuffledProductsPool.filter(p => targets.includes(p.categoryId)).slice(0, 10);
 
       return {
         id: category.id,
@@ -104,15 +128,30 @@ export class StorefrontService {
   }
 
   async getHomepageRegistry() {
+    const targetFeedSize = 20;
+
+    // 🎲 DICE SHUFFLE UPGRADE STEP 2: Handle global "Explore your interest" feed
+    // Fetch total active global platform count across all vendors
+    const totalGlobalProducts = await this.prisma.product.count({
+      where: activeProductFilter,
+    });
+
+    let globalRandomSkip = 0;
+    // If the database has more items than our target return size, slide the skip window randomly
+    if (totalGlobalProducts > targetFeedSize) {
+      const maxPossibleSkip = totalGlobalProducts - targetFeedSize;
+      globalRandomSkip = Math.floor(Math.random() * maxPossibleSkip);
+    }
+
     const [exploreProducts, topVendors] = await Promise.all([
       this.prisma.product.findMany({
         where: activeProductFilter,
-        take: 20,
+        take: targetFeedSize,
+        skip: globalRandomSkip, // 👈 Offsets static listings so old posts match new ones on refresh
         include: {
           ...this.productIncludes,
           reviews: { select: { rating: true } }
         },
-        orderBy: { createdAt: 'desc' },
       }),
       this.prisma.vendor.findMany({
         where: { status: VendorStatus.ACTIVE },
@@ -125,6 +164,9 @@ export class StorefrontService {
       })
     ]);
 
+    // Shuffle the final slice block inside server runtime memory so sorting order is organic
+    const finalShuffledExplore = exploreProducts.sort(() => Math.random() - 0.5);
+
     return {
       vendors: topVendors,
       sections: [
@@ -132,7 +174,7 @@ export class StorefrontService {
           id: 'explore_interests', 
           title: 'Explore your interest', 
           subtitle: 'Personalized Recommendation Feed',
-          data: exploreProducts.map((p) => normalizeProduct(p as unknown as ProductWithRelations))
+          data: finalShuffledExplore.map((p) => normalizeProduct(p as unknown as ProductWithRelations))
         }
       ]
     };
@@ -189,7 +231,7 @@ export class StorefrontService {
     };
   }
 
-async getActiveCampaigns() {
+  async getActiveCampaigns() {
     const campaigns = await this.prisma.campaign.findMany({
       where: { isActive: true, startDate: { lte: new Date() }, endDate: { gte: new Date() } },
       include: {
@@ -204,14 +246,14 @@ async getActiveCampaigns() {
       orderBy: { createdAt: 'desc' },
     });
 
-    return campaigns.map((campaign: any) => ({ // 💡 Cast campaign as any here locally to safely extract optional fields
+    return campaigns.map((campaign: any) => ({ 
       id: campaign.id,
       title: campaign.title,
       description: campaign.description,
       discount: campaign.discount,
       bannerUrl: campaign.bannerUrl,
-      themeColor: campaign.themeColor ?? '#000000', // Safe fallback if column doesn't exist
-      slug: campaign.slug ?? campaign.id,           // Fallback to ID if slug column is absent
+      themeColor: campaign.themeColor ?? '#000000', 
+      slug: campaign.slug ?? campaign.id,          
       endDate: campaign.endDate,
       products: campaign.products.map((cp: any) => ({
         ...normalizeProduct(cp.product as unknown as ProductWithRelations),
@@ -383,7 +425,6 @@ async getActiveCampaigns() {
     const { sort, category, maxPrice, origin, maxDeliveryDays, limit, page } = query;
     const takeLimit = limit ? parseInt(limit) : 12;
     
-    // 🚀 Support Cursor/Offset Pagination smoothly for Infinite Scrolls
     const currentPage = page ? parseInt(page) : 1;
     const skipOffset = (currentPage - 1) * takeLimit;
 
@@ -398,10 +439,38 @@ async getActiveCampaigns() {
     if (maxDeliveryDays) whereClause.deliveryMax = { lte: parseInt(maxDeliveryDays) };
 
     let orderByClause: Prisma.ProductOrderByWithRelationInput | Prisma.ProductOrderByWithRelationInput[] = { createdAt: 'desc' };
+    
+    // 🎲 DICE SHUFFLE UPGRADE STEP 3: Handle Discovery/Search default random option
     if (sort === 'trending') {
       orderByClause = [{ reviewCount: 'desc' }, { averageRating: 'desc' }];
     } else if (sort === 'newest') {
       orderByClause = { createdAt: 'desc' };
+    } else if (!sort || sort === 'random') {
+      // If no explicit filter sorting criteria is selected, inject randomized sliding offsets
+      const totalDiscoveryCount = await this.prisma.product.count({ where: whereClause });
+      if (totalDiscoveryCount > takeLimit) {
+        const structuralCeiling = Math.max(0, totalDiscoveryCount - takeLimit);
+        const dynamicRandomSkip = Math.floor(Math.random() * structuralCeiling);
+        
+        const randomizedProducts = await this.prisma.product.findMany({
+          where: whereClause,
+          take: takeLimit,
+          skip: dynamicRandomSkip,
+          include: {
+            images: true,
+            variants: { select: { id: true, price: true, stock: true } },
+            vendor: true,
+            category: true,
+          },
+        });
+
+        return { 
+          success: true, 
+          count: randomizedProducts.length, 
+          page: currentPage,
+          products: randomizedProducts.sort(() => Math.random() - 0.5).map((p) => normalizeProduct(p as unknown as ProductWithRelations)) 
+        };
+      }
     }
 
     const products = await this.prisma.product.findMany({
