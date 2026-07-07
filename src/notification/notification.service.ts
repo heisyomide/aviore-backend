@@ -7,10 +7,8 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma.service';
-// 🌟 FIX: Removed the duplicate import of MailService from line 10 
-// since it's declared locally right at the bottom of this file.
-import * as webpush from 'web-push';
 import { MailService } from 'src/mail/mail.service';
+import * as webpush from 'web-push';
 
 export interface NotificationPayload {
   userId: string;
@@ -33,16 +31,18 @@ export interface NotificationPayload {
 export class NotificationService implements OnModuleInit {
   private readonly logger = new Logger(NotificationService.name);
 
+  // Maps incoming interface categories cleanly to database setting fields and matching DB upper-case Enums
   private readonly categoryMap = {
-    orderUpdates: 'orderUpdates',
-    promotions: 'promotions',
-    chatMessages: 'chatMessages',
-    storeActivity: 'storeActivity',
-    priceDrops: 'priceDrops',
-    withdrawals: 'withdrawals',
-    payouts: 'payouts',
-    security: 'security',
-    system: 'system',
+    orderUpdates: { settingField: 'orderUpdates', dbType: 'ORDER_UPDATE' },
+    promotions: { settingField: 'promotions', dbType: 'PROMOTION' },
+    chatMessages: { settingField: 'chatMessages', dbType: 'CHAT' },
+    storeActivity: { settingField: 'storeActivity', dbType: 'STORE_ACTIVITY' },
+    priceDrops: { settingField: 'priceDrops', dbType: 'PRICE_DROP' },
+    // Safely map secondary application types to fallback properties to ensure safe execution
+    withdrawals: { settingField: 'orderUpdates', dbType: 'WITHDRAWAL' },
+    payouts: { settingField: 'orderUpdates', dbType: 'PAYOUT' },
+    security: { settingField: 'orderUpdates', dbType: 'SECURITY' },
+    system: { settingField: 'systemEnabled' as any, dbType: 'SYSTEM' }, 
   } as const;
 
   constructor(
@@ -81,6 +81,7 @@ export class NotificationService implements OnModuleInit {
   }
 
   private async getSettings(userId: string) {
+    // Synchronized with the singular table accessor method name
     let settings = await this.prisma.notificationSetting.findUnique({
       where: { userId },
     });
@@ -98,11 +99,15 @@ export class NotificationService implements OnModuleInit {
 
     try {
       const settings = await this.getSettings(userId);
-      const mappedCategory = this.categoryMap[category];
+      const mapping = this.categoryMap[category];
 
-      if (mappedCategory && settings[mappedCategory as keyof typeof settings] === false) {
-        this.logger.log(`Notification skipped: User ${userId} has turned off ${category} preferences.`);
-        return null;
+      // Safely check notification toggle values dynamically using structural mapping bounds
+      if (mapping && mapping.settingField in settings) {
+        const isEnabled = settings[mapping.settingField as keyof typeof settings];
+        if (isEnabled === false) {
+          this.logger.log(`Notification skipped: User ${userId} has turned off ${category} preferences.`);
+          return null;
+        }
       }
 
       const notification = await this.prisma.notification.create({
@@ -110,14 +115,14 @@ export class NotificationService implements OnModuleInit {
           userId,
           title,
           message,
-          type: category.toUpperCase(),
+          type: mapping ? mapping.dbType : 'SYSTEM',
           isRead: false,
         },
       });
 
       if (settings.pushEnabled) {
         this.logger.log(`[Push Dispatch Channel Triggered] for user ${userId}`);
-        this.dispatchWebPush(userId, title, message);
+        await this.dispatchWebPush(userId, title, message);
       }
 
       return notification;
@@ -134,6 +139,7 @@ export class NotificationService implements OnModuleInit {
 
     if (!devices.length) return;
 
+    // Standard flat object payload structure optimized for standard Service Workers parsing
     const payload = JSON.stringify({
       title: title,
       body: message,
@@ -202,25 +208,76 @@ export class NotificationService implements OnModuleInit {
     });
   }
 
+  // Global broadcast method executing over unique users utilizing concurrency chunk safety limits
   async broadcast(title: string, message: string) {
-    const users = await this.prisma.user.findMany({
-      select: { id: true },
+    // 🌟 FIX: Updated filter matching your exact pluralized User schema relation 'notificationSettings'
+    const targetSubscriptions = await this.prisma.pushSubscription.findMany({
+      where: {
+        user: {
+          notificationSettings: {
+            pushEnabled: true,
+          },
+        },
+      },
+      select: {
+        id: true,
+        endpoint: true,
+        p256dh: true,
+        auth: true,
+        userId: true,
+      },
     });
 
-    await Promise.all(
-      users.map((user) =>
-        this.send({
-          userId: user.id,
-          title,
-          message,
-          category: 'system',
-        }),
-      ),
-    );
+    const uniqueUserIds = Array.from(new Set(targetSubscriptions.map(s => s.userId)));
+
+    // Sequential in-app feed processing loop utilizing core pipeline validation checks 
+    for (const userId of uniqueUserIds) {
+      await this.send({
+        userId,
+        title,
+        message,
+        category: 'system',
+      });
+    }
+
+    // Prevents performance execution timeouts by chunking concurrent PWA payload updates into groups of 100
+    const chunkSize = 100;
+    const payload = JSON.stringify({
+      title: title,
+      body: message,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      vibrate: [100, 50, 100],
+      data: { url: '/dashboard/notifications' }
+    });
+
+    for (let i = 0; i < targetSubscriptions.length; i += chunkSize) {
+      const chunk = targetSubscriptions.slice(i, i + chunkSize);
+      
+      await Promise.all(
+        chunk.map(async (device) => {
+          const pushSubscriptionObj = {
+            endpoint: device.endpoint,
+            keys: {
+              p256dh: device.p256dh,
+              auth: device.auth,
+            },
+          };
+
+          try {
+            await webpush.sendNotification(pushSubscriptionObj, payload);
+          } catch (error: any) {
+            if (error.statusCode === 410 || error.statusCode === 404) {
+              await this.prisma.pushSubscription.delete({ where: { id: device.id } }).catch(() => {});
+            }
+          }
+        })
+      );
+    }
 
     return {
       success: true,
-      recipients: users.length,
+      recipients: uniqueUserIds.length,
     };
   }
 }

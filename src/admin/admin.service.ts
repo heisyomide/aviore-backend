@@ -837,193 +837,212 @@ async moderateReview(id: string, adminId: string, action: 'DELETE' | 'HIDE' | 'F
 
 
 
-
-async executeBroadcast(dto: { 
-  title: string; 
-  message: string; 
-  target: 'ALL' | 'VENDORS' | 'CUSTOMERS';
-  channels: { email: boolean; push: boolean; sms: boolean };
-}, adminId: string) {
-  
-  // 1. IDENTITY MAPPING PROTOCOL
-  const roleMapping: Record<string, any | undefined> = {
-    'VENDORS': 'VENDOR', // Adjust string mapping to line up precisely with your Prisma Role enum
-    'CUSTOMERS': 'CUSTOMER',
-    'ALL': undefined,
-  };
-
-  const targetRole = roleMapping[dto.target];
-
-  // 2. FETCH AUDIENCE FROM REGISTRY
-  const users = await this.prisma.user.findMany({
-    where: targetRole ? { role: targetRole } : {},
-    select: { id: true, email: true }
-  });
-
-  if (users.length === 0) {
-    return { status: 'NO_TARGETS_FOUND', results: { pushCount: 0, emailCount: 0, feedCount: 0 } };
-  }
-
-  const results = { pushCount: 0, emailCount: 0, feedCount: 0 };
-
-  // 3. PERSISTENT IN-APP FEED NOTIFICATION PIPELINE
-  try {
-    const feedRecords = users.map(user => ({
-      userId: user.id,
-      title: dto.title,
-      message: dto.message,
-      type: 'BROADCAST', 
-      isRead: false,
-    }));
-
-    const batchFeed = await this.prisma.notification.createMany({
-      data: feedRecords,
-      skipDuplicates: true,
-    });
+async executeBroadcast(
+    dto: { 
+      title: string; 
+      message: string; 
+      target: 'ALL' | 'VENDORS' | 'CUSTOMERS';
+      channels: { email: boolean; push: boolean; sms: boolean };
+    }, 
+    adminId: string
+  ) {
     
-    results.feedCount = batchFeed.count;
-  } catch (feedError: any) {
-    console.error('🔴 BROADCAST_FEED_SYNC_FAIL:', feedError.message);
-  }
+    // 1. IDENTITY MAPPING PROTOCOL
+    const roleMapping: Record<string, any | undefined> = {
+      'VENDORS': 'VENDOR',
+      'CUSTOMERS': 'CUSTOMER',
+      'ALL': undefined,
+    };
 
-  // 4. Native PWA Web-Push Relay (Swapped Firebase for your PushSubscription table mappings)
-  if (dto.channels.push) {
-    try {
-      // Fetch every active browser device hook linked to our audience segment group
-      const devices = await this.prisma.pushSubscription.findMany({
-        where: targetRole ? { user: { role: targetRole } } : {},
+    const targetRole = roleMapping[dto.target];
+
+    // 2. FETCH AUDIENCE FROM REGISTRY (Includes relations to accurately filter preferences)
+    const users = await this.prisma.user.findMany({
+      where: targetRole ? { role: targetRole } : {},
+      select: { 
+        id: true, 
+        email: true,
+        notificationSettings: true // 🌟 FIX: Pluralized 'notificationSettings' to match your underlying Prisma relation schema
+      }
+    });
+
+    if (users.length === 0) {
+      return { status: 'NO_TARGETS_FOUND', results: { pushCount: 0, emailCount: 0, feedCount: 0 } };
+    }
+
+    const results = { pushCount: 0, emailCount: 0, feedCount: 0 };
+
+    // 3. PERSISTENT IN-APP FEED NOTIFICATION PIPELINE
+    // 🌟 FIX: Re-routes pipeline traffic using the injected provider instance ('this.notificationService.send')
+    for (const user of users) {
+      const sentNotification = await this.notificationService.send({
+        userId: user.id,
+        title: dto.title,
+        message: dto.message,
+        category: 'system'
       });
+      if (sentNotification) {
+        results.feedCount++;
+      }
+    }
 
-      if (devices.length > 0) {
-        const webPushPayload = JSON.stringify({
-          notification: {
+    // 4. Native PWA Web-Push Relay
+    if (dto.channels.push) {
+      try {
+        const deviceQueryConditions: any = {
+          user: {
+            notificationSettings: { // 🌟 FIX: Pluralized structural block selector object
+              pushEnabled: true
+            }
+          }
+        };
+
+        if (targetRole) {
+          deviceQueryConditions.user.role = targetRole;
+        }
+
+        const devices = await this.prisma.pushSubscription.findMany({
+          where: deviceQueryConditions,
+        });
+
+        if (devices.length > 0) {
+          // Standard flat payload arrangement structure matching standard service worker parsers cleanly
+          const webPushPayload = JSON.stringify({
             title: dto.title,
             body: dto.message,
             icon: '/icons/icon-192.png',
             badge: '/icons/icon-192.png',
             vibrate: [100, 50, 100],
             data: { url: '/dashboard/notifications' },
-          },
-        });
+          });
 
-        // Broadcast out to all verified Apple/Google endpoints concurrently
-        await Promise.all(
-          devices.map(async (device) => {
-            const pushSubscriptionObj = {
-              endpoint: device.endpoint,
-              keys: {
-                p256dh: device.p256dh,
-                auth: device.auth,
-              },
-            };
+          // Concurrency protection buffer grouping targets into micro batches of 100
+          const chunkSize = 100;
+          for (let i = 0; i < devices.length; i += chunkSize) {
+            const chunk = devices.slice(i, i + chunkSize);
+            
+            await Promise.all(
+              chunk.map(async (device) => {
+                const pushSubscriptionObj = {
+                  endpoint: device.endpoint,
+                  keys: {
+                    p256dh: device.p256dh,
+                    auth: device.auth,
+                  },
+                };
 
-            try {
-              await webpush.sendNotification(pushSubscriptionObj, webPushPayload);
-              results.pushCount++;
-            } catch (pushError: any) {
-              console.error(`Failed pushing to broadcast device target: ${device.id}`, pushError.message);
-              // Clean up uninstalled or expired subscription payloads (HTTP 410 Gone / 404)
-              if (pushError.statusCode === 410 || pushError.statusCode === 404) {
-                await this.prisma.pushSubscription.delete({ where: { id: device.id } }).catch(() => {});
-              }
-            }
-          })
-        );
-      }
-    } catch (pushChannelError: any) {
-      console.error('🔴 CRITICAL_WEB_PUSH_BROADCAST_ROUTING_FAILURE:', pushChannelError.message);
-    }
-  }
-
-  // 5. EMAIL RELAY (Resend Batch Protocol)
-  if (dto.channels.email) {
-    const emailList = users.map(u => u.email).filter(email => !!email);
-    
-    if (emailList.length > 0) {
-      try {
-        const batchSize = 100;
-        
-        for (let i = 0; i < emailList.length; i += batchSize) {
-          const emailChunk = emailList.slice(i, i + batchSize);
-          
-          const batchPayload = emailChunk.map(targetEmail => ({
-            from: 'AVIORÈ <no-reply@shopaviore.store>',
-            to: targetEmail,
-            subject: dto.title,
-            html: `
-              <!DOCTYPE html>
-              <html>
-                <head>
-                  <meta charset="utf-8">
-                  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                  <title>${dto.title}</title>
-                </head>
-                <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
-                  <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
-                    <tr>
-                      <td style="padding: 40px 40px 20px 40px; text-align: left;">
-                        <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 0 40px;">
-                        <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 40px 40px 30px 40px;">
-                        <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
-                          ${dto.title}
-                        </h1>
-                        <p style="color: #a3a3a3; font-size: 15px; line-height: 1.7; font-weight: 300; margin: 0 0 32px 0;">
-                          ${dto.message.replace(/\n/g, '<br>')}
-                        </p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 0 40px 40px 40px;">
-                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
-                          <tr>
-                            <td>
-                              <p style="margin: 0 0 4px 0; font-size: 10px; font-weight: 600; color: #404040; text-transform: uppercase; letter-spacing: 2px;">
-                                Secure Distribution // Aviorè Command Center
-                              </p>
-                              <p style="margin: 0; font-size: 11px; color: #262626;">
-                                This message was transmitted securely via internal system configurations.
-                              </p>
-                            </td>
-                          </tr>
-                        </table>
-                      </td>
-                    </tr>
-                  </table>
-                </body>
-              </html>
-            `,
-          }));
-
-          await this.resend.batch.send(batchPayload);
-          results.emailCount += emailChunk.length;
+                try {
+                  await webpush.sendNotification(pushSubscriptionObj, webPushPayload);
+                  results.pushCount++;
+                } catch (pushError: any) {
+                  console.error(`Failed pushing to broadcast device target: ${device.id}`, pushError.message);
+                  // Clean up uninstalled or expired subscription payloads (HTTP 410 Gone / 404)
+                  if (pushError.statusCode === 410 || pushError.statusCode === 404) {
+                    await this.prisma.pushSubscription.delete({ where: { id: device.id } }).catch(() => {});
+                  }
+                }
+              })
+            );
+          }
         }
-      } catch (error) {
-        console.error('SECURE_EMAIL_BATCH_FAILURE:', error);
+      } catch (pushChannelError: any) {
+        console.error('🔴 CRITICAL_WEB_PUSH_BROADCAST_ROUTING_FAILURE:', pushChannelError.message);
       }
     }
+
+    // 5. EMAIL RELAY (Resend Batch Protocol)
+    if (dto.channels.email) {
+      // 🌟 FIX: Cast / lookup verification against correct structural mapping 'notificationSettings'
+      const emailList = users
+        .filter(u => u.email && (!u.notificationSettings || (u.notificationSettings as any).emailEnabled !== false))
+        .map(u => u.email);
+      
+      if (emailList.length > 0) {
+        try {
+          const batchSize = 100;
+          
+          for (let i = 0; i < emailList.length; i += batchSize) {
+            const emailChunk = emailList.slice(i, i + batchSize);
+            
+            const batchPayload = emailChunk.map(targetEmail => ({
+              from: 'AVIORÈ <no-reply@shopaviore.store>',
+              to: targetEmail!,
+              subject: dto.title,
+              html: `
+                <!DOCTYPE html>
+                <html>
+                  <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>${dto.title}</title>
+                  </head>
+                  <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+                    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+                      <tr>
+                        <td style="padding: 40px 40px 20px 40px; text-align: left;">
+                          <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 0 40px;">
+                          <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 40px 40px 30px 40px;">
+                          <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
+                            ${dto.title}
+                          </h1>
+                          <p style="color: #a3a3a3; font-size: 15px; line-height: 1.7; font-weight: 300; margin: 0 0 32px 0;">
+                            ${dto.message.replace(/\n/g, '<br>')}
+                          </p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 0 40px 40px 40px;">
+                          <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
+                            <tr>
+                              <td>
+                                <p style="margin: 0 0 4px 0; font-size: 10px; font-weight: 600; color: #404040; text-transform: uppercase; letter-spacing: 2px;">
+                                  Secure Distribution // Aviorè Command Center
+                                </p>
+                                <p style="margin: 0; font-size: 11px; color: #262626;">
+                                  This message was transmitted securely via internal system configurations.
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </body>
+                </html>
+              `,
+            }));
+
+            await this.resend.batch.send(batchPayload);
+            results.emailCount += emailChunk.length;
+          }
+        } catch (error) {
+          console.error('SECURE_EMAIL_BATCH_FAILURE:', error);
+        }
+      }
+    }
+
+    // 6. LOG AUTHORITY ACTION
+    await this.prisma.auditLog.create({
+      data: {
+        adminId,
+        action: 'SYSTEM_BROADCAST' as any, 
+        targetType: 'SYSTEM_BROADCAST',
+        targetId: 'GLOBAL',
+        details: `DEPLOYED: ${dto.title} | Target: ${dto.target} | Push: ${results.pushCount} | Email: ${results.emailCount} | In-App Feed: ${results.feedCount}`,
+      },
+    });
+
+    return { status: 'TRANSMISSION_COMPLETE', results };
   }
 
-  // 6. LOG AUTHORITY ACTION
-  await this.prisma.auditLog.create({
-    data: {
-      adminId,
-      action: 'UPDATE_COUPON' as any, 
-      targetType: 'SYSTEM_BROADCAST',
-      targetId: 'GLOBAL',
-      details: `DEPLOYED: ${dto.title} | Target: ${dto.target} | Push: ${results.pushCount} | Email: ${results.emailCount} | In-App Feed: ${results.feedCount}`,
-    },
-  });
-
-  return { status: 'TRANSMISSION_COMPLETE', results };
-}
 //==================================================
 // DECURITY
 //=================================================
