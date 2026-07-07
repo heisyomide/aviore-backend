@@ -10,6 +10,7 @@ import { GrowthMetricsQueryDto } from './dto/growth-metrics-query.dto';
 import { GrowthVendorsActivationService } from 'src/growth/vendors/vendors-activation.service';
 import { NotificationService } from '../notification/notification.service';
 import { VendorService } from '../vendor/vendor.service';
+import * as webpush from 'web-push';
 
 
 @Injectable()
@@ -835,7 +836,7 @@ async moderateReview(id: string, adminId: string, action: 'DELETE' | 'HIDE' | 'F
 
 
 
-// src/admin/admin.service.ts
+
 
 async executeBroadcast(dto: { 
   title: string; 
@@ -845,9 +846,9 @@ async executeBroadcast(dto: {
 }, adminId: string) {
   
   // 1. IDENTITY MAPPING PROTOCOL
-  const roleMapping: Record<string, Role | undefined> = {
-    'VENDORS': Role.VENDOR,
-    'CUSTOMERS': Role.CUSTOMER,
+  const roleMapping: Record<string, any | undefined> = {
+    'VENDORS': 'VENDOR', // Adjust string mapping to line up precisely with your Prisma Role enum
+    'CUSTOMERS': 'CUSTOMER',
     'ALL': undefined,
   };
 
@@ -856,7 +857,7 @@ async executeBroadcast(dto: {
   // 2. FETCH AUDIENCE FROM REGISTRY
   const users = await this.prisma.user.findMany({
     where: targetRole ? { role: targetRole } : {},
-    select: { id: true, email: true, pushToken: true }
+    select: { id: true, email: true }
   });
 
   if (users.length === 0) {
@@ -871,11 +872,10 @@ async executeBroadcast(dto: {
       userId: user.id,
       title: dto.title,
       message: dto.message,
-      type: 'BROADCAST', // ✅ FIXED: Added the mandatory required schema field
+      type: 'BROADCAST', 
       isRead: false,
     }));
 
-    // Use Prisma's high-speed createMany protocol for raw execution speed
     const batchFeed = await this.prisma.notification.createMany({
       data: feedRecords,
       skipDuplicates: true,
@@ -886,20 +886,52 @@ async executeBroadcast(dto: {
     console.error('🔴 BROADCAST_FEED_SYNC_FAIL:', feedError.message);
   }
 
-  // 4. PUSH RELAY (Firebase Batch Protocol)
+  // 4. Native PWA Web-Push Relay (Swapped Firebase for your PushSubscription table mappings)
   if (dto.channels.push) {
-    const tokens = users.map(u => u.pushToken).filter(t => !!t) as string[];
-    
-    if (tokens.length > 0) {
-      for (let i = 0; i < tokens.length; i += 500) {
-        const batch = tokens.slice(i, i + 500);
-        await admin.messaging().sendEachForMulticast({
-          tokens: batch,
-          notification: { title: dto.title, body: dto.message },
-          data: { type: 'BROADCAST_ALERT' }
+    try {
+      // Fetch every active browser device hook linked to our audience segment group
+      const devices = await this.prisma.pushSubscription.findMany({
+        where: targetRole ? { user: { role: targetRole } } : {},
+      });
+
+      if (devices.length > 0) {
+        const webPushPayload = JSON.stringify({
+          notification: {
+            title: dto.title,
+            body: dto.message,
+            icon: '/icons/icon-192.png',
+            badge: '/icons/icon-192.png',
+            vibrate: [100, 50, 100],
+            data: { url: '/dashboard/notifications' },
+          },
         });
-        results.pushCount += batch.length;
+
+        // Broadcast out to all verified Apple/Google endpoints concurrently
+        await Promise.all(
+          devices.map(async (device) => {
+            const pushSubscriptionObj = {
+              endpoint: device.endpoint,
+              keys: {
+                p256dh: device.p256dh,
+                auth: device.auth,
+              },
+            };
+
+            try {
+              await webpush.sendNotification(pushSubscriptionObj, webPushPayload);
+              results.pushCount++;
+            } catch (pushError: any) {
+              console.error(`Failed pushing to broadcast device target: ${device.id}`, pushError.message);
+              // Clean up uninstalled or expired subscription payloads (HTTP 410 Gone / 404)
+              if (pushError.statusCode === 410 || pushError.statusCode === 404) {
+                await this.prisma.pushSubscription.delete({ where: { id: device.id } }).catch(() => {});
+              }
+            }
+          })
+        );
       }
+    } catch (pushChannelError: any) {
+      console.error('🔴 CRITICAL_WEB_PUSH_BROADCAST_ROUTING_FAILURE:', pushChannelError.message);
     }
   }
 
@@ -928,19 +960,16 @@ async executeBroadcast(dto: {
                 </head>
                 <body style="margin: 0; padding: 40px 20px; background-color: #050505; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
                   <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border: 1px solid #141414; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
-                    
                     <tr>
                       <td style="padding: 40px 40px 20px 40px; text-align: left;">
                         <span style="font-size: 20px; font-weight: 800; letter-spacing: 4px; color: #ffffff; text-transform: uppercase;">AVIORÈ</span>
                       </td>
                     </tr>
-
                     <tr>
                       <td style="padding: 0 40px;">
                         <div style="height: 1px; background: linear-gradient(90deg, #1f1f1f 0%, rgba(31,31,31,0) 100%);"></div>
                       </td>
                     </tr>
-
                     <tr>
                       <td style="padding: 40px 40px 30px 40px;">
                         <h1 style="color: #ffffff; font-size: 26px; font-weight: 400; letter-spacing: -0.5px; line-height: 1.3; margin: 0 0 24px 0; text-transform: capitalize;">
@@ -951,7 +980,6 @@ async executeBroadcast(dto: {
                         </p>
                       </td>
                     </tr>
-
                     <tr>
                       <td style="padding: 0 40px 40px 40px;">
                         <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #141414; padding-top: 24px;">
@@ -968,7 +996,6 @@ async executeBroadcast(dto: {
                         </table>
                       </td>
                     </tr>
-
                   </table>
                 </body>
               </html>
@@ -997,8 +1024,6 @@ async executeBroadcast(dto: {
 
   return { status: 'TRANSMISSION_COMPLETE', results };
 }
-
-
 //==================================================
 // DECURITY
 //=================================================
