@@ -3,10 +3,12 @@ import {
   Inject,
   Injectable,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma.service';
 import { MailService } from '../mail/mail.service';
+import * as webpush from 'web-push'; // 🌟 ADDED
 
 export interface NotificationPayload {
   userId: string;
@@ -26,7 +28,7 @@ export interface NotificationPayload {
 }
 
 @Injectable()
-export class NotificationService {
+export class NotificationService implements OnModuleInit { // 🌟 Added Lifecycle hook
   private readonly logger = new Logger(NotificationService.name);
 
   private readonly categoryMap = {
@@ -41,13 +43,42 @@ export class NotificationService {
     system: null,
   } as const;
 
-  // ✅ FIXED: Separated Prisma and accurately bound forwardRef directly to MailService
   constructor(
     private readonly prisma: PrismaService,
 
     @Inject(forwardRef(() => MailService))
     private readonly mailService: MailService,
   ) {}
+
+  // 🌟 INITIALIZE VAPID CHANNELS
+  onModuleInit() {
+    webpush.setVapidDetails(
+      process.env.VAPID_SUBJECT || 'mailto:admin@shopaviore.store',
+      process.env.VAPID_PUBLIC_KEY!,
+      process.env.VAPID_PRIVATE_KEY!,
+    );
+    this.logger.log('🚀 Web-Push encryption engine initialized with VAPID credentials.');
+  }
+
+  // 🌟 SAVE SUBSCRIPTIONS FROM FRONTEND
+  async saveSubscription(userId: string, subscriptionDto: any) {
+    const { endpoint, keys } = subscriptionDto;
+    
+    return this.prisma.pushSubscription.upsert({
+      where: { endpoint },
+      update: {
+        userId,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+      },
+      create: {
+        userId,
+        endpoint,
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+      },
+    });
+  }
 
   private async getSettings(userId: string) {
     let settings = await this.prisma.notificationSetting.findUnique({
@@ -69,28 +100,28 @@ export class NotificationService {
       const settings = await this.getSettings(userId);
       const mappedCategory = this.categoryMap[category];
 
-      // Check preference array constraints if explicitly bound to a user preference field
       if (mappedCategory && settings[mappedCategory as keyof typeof settings] === false) {
         this.logger.log(`Notification skipped: User ${userId} has turned off ${category} preferences.`);
         return null;
       }
 
-      // ✅ FIXED: Removed the fatal 'if (!settings.pushEnabled) return null' blockage line.
-      // We always write the row record to the user's database history feed log.
+      // Write row record history log to user data feed
       const notification = await this.prisma.notification.create({
         data: {
           userId,
           title,
           message,
-          type: category.toUpperCase(), // Aligns with 'CHAT_MESSAGES', 'SECURITY', 'SYSTEM'
+          type: category.toUpperCase(),
           isRead: false,
         },
       });
 
-      // 📲 External push dispatch step can be conditionally triggered downstream here:
+      // 📲 🌟 LIVE PWA PUSH INJECTION ROUTE
       if (settings.pushEnabled) {
-        // Trigger real-time mechanisms like Socket.io gateway emit / Firebase Web Push here later!
         this.logger.log(`[Push Dispatch Channel Triggered] for user ${userId}`);
+        
+        // Asynchronously fire push notifications without blocking database execution
+        this.dispatchWebPush(userId, title, message);
       }
 
       return notification;
@@ -100,39 +131,72 @@ export class NotificationService {
     }
   }
 
-  async markAsRead(notificationId: string, userId: string) {
-    const notification = await this.prisma.notification.findFirst({
-      where: {
-        id: notificationId,
-        userId,
+  // 🌟 ASYNCHRONOUS WEB PUSH DELIVERER HELPER
+  private async dispatchWebPush(userId: string, title: string, message: string) {
+    const devices = await this.prisma.pushSubscription.findMany({
+      where: { userId },
+    });
+
+    if (!devices.length) return;
+
+    const payload = JSON.stringify({
+      notification: {
+        title,
+        body: message,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        vibrate: [100, 50, 100],
+        data: { url: '/dashboard/notifications' },
       },
     });
 
-    if (!notification) {
-      return null;
-    }
+    await Promise.all(
+      devices.map(async (device) => {
+        const pushSubscriptionObj = {
+          endpoint: device.endpoint,
+          keys: {
+            p256dh: device.p256dh,
+            auth: device.auth,
+          },
+        };
+
+        try {
+          await webpush.sendNotification(pushSubscriptionObj, payload);
+        } catch (error: any) {
+          this.logger.error(`Failed pushing to device endpoint: ${device.id}`, error);
+          // Clean up dead, uninstalled, or revoked browser subscription tokens (HTTP 410 / 404)
+          if (error.statusCode === 410 || error.statusCode === 404) {
+            await this.prisma.pushSubscription.delete({ where: { id: device.id } });
+            this.logger.warn(`Cleaned up expired subscription instance token: ${device.id}`);
+          }
+        }
+      }),
+    );
+  }
+
+  async markAsRead(notificationId: string, userId: string) {
+    const notification = await this.prisma.notification.findFirst({
+      where: { id: notificationId, userId },
+    });
+
+    if (!notification) return null;
+    
     return this.prisma.notification.update({
       where: { id: notificationId },
       data: { isRead: true },
     });
   }
 
-async markAllAsRead(userId: string) {
-  return this.prisma.notification.updateMany({ // ✅ Single '.prisma'
-    where: {
-      userId,
-      isRead: false,
-    },
-    data: { isRead: true },
-  });
-}
+  async markAllAsRead(userId: string) {
+    return this.prisma.notification.updateMany({
+      where: { userId, isRead: false },
+      data: { isRead: true },
+    });
+  }
 
   async unreadCount(userId: string) {
     return this.prisma.notification.count({
-      where: {
-        userId,
-        isRead: false,
-      },
+      where: { userId, isRead: false },
     });
   }
 
@@ -148,7 +212,7 @@ async markAllAsRead(userId: string) {
       select: { id: true },
     });
 
-    // Uses the fixed send method to safely register all entries
+    // Uses the fixed send method to safely register entry mappings and fire live web push triggers automatically
     await Promise.all(
       users.map((user) =>
         this.send({

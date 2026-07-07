@@ -80,6 +80,7 @@
     "socket.io": "^4.8.3",
     "swagger-ui-express": "^5.0.1",
     "tesseract.js": "^7.0.0",
+    "web-push": "^3.6.7",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^4.4.1"
@@ -103,6 +104,7 @@
     "@types/recharts": "^1.8.29",
     "@types/socket.io": "^3.0.1",
     "@types/supertest": "^6.0.2",
+    "@types/web-push": "^3.6.4",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
