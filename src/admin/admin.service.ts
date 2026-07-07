@@ -836,7 +836,6 @@ async moderateReview(id: string, adminId: string, action: 'DELETE' | 'HIDE' | 'F
 
 
 
-
 async executeBroadcast(
     dto: { 
       title: string; 
@@ -862,7 +861,7 @@ async executeBroadcast(
       select: { 
         id: true, 
         email: true,
-        notificationSettings: true // 🌟 FIX: Pluralized 'notificationSettings' to match your underlying Prisma relation schema
+        notificationSettings: true
       }
     });
 
@@ -873,7 +872,6 @@ async executeBroadcast(
     const results = { pushCount: 0, emailCount: 0, feedCount: 0 };
 
     // 3. PERSISTENT IN-APP FEED NOTIFICATION PIPELINE
-    // 🌟 FIX: Re-routes pipeline traffic using the injected provider instance ('this.notificationService.send')
     for (const user of users) {
       const sentNotification = await this.notificationService.send({
         userId: user.id,
@@ -891,7 +889,7 @@ async executeBroadcast(
       try {
         const deviceQueryConditions: any = {
           user: {
-            notificationSettings: { // 🌟 FIX: Pluralized structural block selector object
+            notificationSettings: {
               pushEnabled: true
             }
           }
@@ -901,21 +899,20 @@ async executeBroadcast(
           deviceQueryConditions.user.role = targetRole;
         }
 
+        // 🌟 STRUCTURAL UPGRADE: Include the user profile reference relation 
+        // to safely analyze the account's active role dynamically during batching blocks.
         const devices = await this.prisma.pushSubscription.findMany({
           where: deviceQueryConditions,
+          include: {
+            user: {
+              select: {
+                role: true
+              }
+            }
+          }
         });
 
         if (devices.length > 0) {
-          // Standard flat payload arrangement structure matching standard service worker parsers cleanly
-          const webPushPayload = JSON.stringify({
-            title: dto.title,
-            body: dto.message,
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
-            vibrate: [100, 50, 100],
-            data: { url: '/dashboard/notifications' },
-          });
-
           // Concurrency protection buffer grouping targets into micro batches of 100
           const chunkSize = 100;
           for (let i = 0; i < devices.length; i += chunkSize) {
@@ -931,12 +928,28 @@ async executeBroadcast(
                   },
                 };
 
+                // 🌟 ROLE STRUCTURAL SELECTOR:
+                // Check if this specific target device owner is registered as a VENDOR or CUSTOMER
+                const deviceUserRole = device.user?.role;
+                const dynamicNotificationRoute = deviceUserRole === 'VENDOR'
+                  ? '/vendor/notifications'
+                  : '/dashboard/notifications';
+
+                // Wrap the unique dynamic URL directly into the specific target payload execution matrix
+                const webPushPayload = JSON.stringify({
+                  title: dto.title,
+                  body: dto.message,
+                  icon: '/icons/icon-192.png',
+                  badge: '/icons/icon-192.png',
+                  vibrate: [100, 50, 100],
+                  data: { url: dynamicNotificationRoute }, // 🌟 Back-end overrides path explicitly per account role type
+                });
+
                 try {
                   await webpush.sendNotification(pushSubscriptionObj, webPushPayload);
                   results.pushCount++;
                 } catch (pushError: any) {
                   console.error(`Failed pushing to broadcast device target: ${device.id}`, pushError.message);
-                  // Clean up uninstalled or expired subscription payloads (HTTP 410 Gone / 404)
                   if (pushError.statusCode === 410 || pushError.statusCode === 404) {
                     await this.prisma.pushSubscription.delete({ where: { id: device.id } }).catch(() => {});
                   }
@@ -952,7 +965,6 @@ async executeBroadcast(
 
     // 5. EMAIL RELAY (Resend Batch Protocol)
     if (dto.channels.email) {
-      // 🌟 FIX: Cast / lookup verification against correct structural mapping 'notificationSettings'
       const emailList = users
         .filter(u => u.email && (!u.notificationSettings || (u.notificationSettings as any).emailEnabled !== false))
         .map(u => u.email);
