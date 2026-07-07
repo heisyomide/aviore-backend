@@ -1085,6 +1085,7 @@ enum AuditAction {
   UPDATE_ORDER
   UPDATE_SETTING
   REJECT_PAYOUT
+  SYSTEM_BROADCAST
 }
 
 enum FraudSeverity {
