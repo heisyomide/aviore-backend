@@ -22,12 +22,12 @@ export class AuthService {
   ) {}
 
 
-  async processForgotPassword(email: string): Promise<{ message: string }> {
+async processForgotPassword(email: string): Promise<{ message: string }> {
     const normalizedEmail = email.toLowerCase().trim();
     const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     // 🟢 ADVANCED SECURITY: Prevent Account Enumeration. 
-    // Always return the exact same success response, even if the email doesn't exist.
+    // Always return the exact same success response immediately, even if the email doesn't exist.
     const genericResponse = { 
       message: 'If an account matches this email, a secure recovery layout link has been dispatched.' 
     };
@@ -56,12 +56,22 @@ export class AuthService {
     const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetLink = `${frontendBaseUrl}/reset-password?token=${rawToken}`;
 
-    // 5. Fire background worker job through Brevo mail client node
-    await this.mailService.sendPasswordResetEmail(user.email, {
+    // 5. 🟢 DECOUPLED ASYNCHRONOUS EXECUTION:
+    // We intentionally do NOT await this promise. This prevents Brevo connection timeouts
+    // from freezing your HTTP request thread and hanging the frontend app.
+    this.mailService.sendPasswordResetEmail(user.email, {
       name: user.firstName || 'User',
       resetLink,
+    }).catch((mailError) => {
+      // Any mailer configuration issue will now safely drop here into your logger panel
+      console.error('❌ CRITICAL RECOVERY SMTP DISPATCH ERROR:', {
+        message: mailError.message,
+        stack: mailError.stack,
+        timestamp: new Date().toISOString()
+      });
     });
 
+    // Instantly return execution to frontend while background client processes the email
     return genericResponse;
   }
 
