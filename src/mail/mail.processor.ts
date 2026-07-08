@@ -3,33 +3,16 @@ import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 import { Resend } from 'resend';
-import * as nodemailer from 'nodemailer';
 
-// 1. Data Structure Definitions
 type WelcomeEmailJob = { userEmail: string; details: { name: string; role: string } };
 type LoginEmailJob = { userEmail: string; details: { name: string; ip: string; device: string } };
 type OrderEmailJob = { vendorEmail: string; orderDetails: { id: string; totalAmount: number } };
-type ForgotPasswordJob = { userEmail: string; details: { name: string; resetLink: string } };
 
 @Processor('mail-queue')
 export class MailProcessor {
   private readonly logger = new Logger(MailProcessor.name);
-  
-  // Primary platform traffic node (Resend)
   private readonly resend = new Resend(process.env.RESEND_API_KEY || 're_placeholder_key');
 
-  // Isolated recovery traffic node (Brevo SMTP configuration)
-  private readonly brevoTransporter = nodemailer.createTransport({
-    host: process.env.BREVO_SMTP_HOST || 'smtp-relay.brevo.com',
-    port: parseInt(process.env.BREVO_SMTP_PORT || '587', 10),
-    secure: false, 
-    auth: {
-      user: process.env.BREVO_SMTP_USER,
-      pass: process.env.BREVO_SMTP_KEY,
-    },
-  });
-
-  // UI Theme Engine Configs (Dark Luxury System Palette)
   private readonly brandColor = '#A4143D';
   private readonly bg = '#050505';
   private readonly surface = '#0d0d0d';
@@ -135,41 +118,6 @@ export class MailProcessor {
     }
   }
 
-  // 🟢 FIXED: Re-integrated Forgot Password Processor Node Linked to Brevo
-  @Process('sendForgotPasswordEmail')
-  async handleForgotPasswordEmail(job: Job<ForgotPasswordJob>) {
-    const { userEmail, details } = job.data;
-    this.logger.log(`🔒 Recovery dispatch execution targeting -> ${userEmail}`);
-
-    const sender = process.env.BREVO_SMTP_USER || 'security@aviore.co';
-
-    try {
-      await this.brevoTransporter.sendMail({
-        from: `"AVIORÈ SECURITY" <${sender}>`,
-        to: userEmail,
-        subject: '🔒 Account Password Reset Link Request',
-        html: this.renderTemplate({
-          content: `
-            ${this.heroSection({
-              eyebrow: 'Security Node',
-              title: 'Reset',
-              highlight: 'Requested',
-              description: `Hello ${details.name}, we received a request to override your account authorization password credential records. Click below to establish new secrets.`,
-              buttonText: 'Authorize Reset',
-              buttonLink: details.resetLink,
-            })}
-            ${this.featureStrip(['Link Valid for 15m', 'Single-Use Access Only'])}
-          `,
-        }),
-      });
-      this.logger.log(`✅ Recovery dispatch successfully transferred to SMTP relay for -> ${userEmail}`);
-    } catch (error: any) {
-      this.logger.error(`❌ Brevo security layout email dispatch failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // --- HTML Rendering UI Templates Engine Methods ---
   private renderTemplate({ content }: { content: string }): string {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/></head><body style="margin:0; padding:0; background-color:${this.bg}; font-family:${this.fontSans}; -webkit-font-smoothing:antialiased;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:${this.bg};"><tr><td align="center" style="padding:40px 14px;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; width:100%; border-radius:24px; background-color:${this.surface}; border:1px solid ${this.border}; overflow:hidden;"><tr><td style="padding:35px 40px; border-bottom:1px solid ${this.border}; background-color:#090909;"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="left"><div style="color:white; font-size:22px; letter-spacing:8px; font-family:${this.fontSerif}; font-weight:300;">AVIORÈ</div></td><td align="right"><div style="color:${this.muted}; font-size:9px; text-transform:uppercase; letter-spacing:2px; font-weight:600;">E-Commerce System</div></td></tr></table></td></tr><tr><td style="padding:0; margin:0;">${content}</td></tr><tr><td style="padding:40px; text-align:center; background-color:#050505; border-top:1px solid ${this.border};"><p style="margin:0 0 12px 0; color:#444444; font-size:9px; letter-spacing:3px; text-transform:uppercase; font-weight:600;">Lagos • Madrid • New York</p><p style="margin:0; color:#2c2c2c; font-size:9px; letter-spacing:1px; text-transform:uppercase; font-weight:500;">© ${new Date().getFullYear()} AVIORÈ Collective. All rights reserved.</p></td></tr></table></td></tr></table></body></html>`;
   }

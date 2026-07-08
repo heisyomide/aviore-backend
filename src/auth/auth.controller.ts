@@ -4,8 +4,7 @@ import {
   UnauthorizedException,
   Res,
   Query,
-  UseInterceptors,
-  BadRequestException
+  UseInterceptors
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -17,7 +16,6 @@ import { GetCookies } from '../common/decorators/get-cookies.decorator';
 import { AntiFraudGuard } from './guard/anti-fraud.guard';
 import { FingerprintRateLimitInterceptor } from './interceptors/fingerprint-ratelimit.interceptor';
 import { ReferralService } from 'src/referral/referral.service';
-import { ForgotPasswordDto, ResetPasswordDto } from './dto/auth-recovery.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -110,21 +108,7 @@ async register(@Body() registerDto: RegisterDto, @Req() req: express.Request) {
     };
   }
 
-  @Post('forgot-password')
-  @HttpCode(HttpStatus.OK)
-  async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.processForgotPassword(dto.email);
-  }
-
-  @Post('reset-password')
-  @HttpCode(HttpStatus.OK)
-  async resetPassword(@Body() dto: ResetPasswordDto) {
-    if (dto.password !== dto.confirmPassword) {
-      throw new BadRequestException('Passwords do not match');
-    }
-    return this.authService.executePasswordReset(dto);
-  }
-
+  
 
   // --- PROFILE ---
   @UseGuards(JwtAuthGuard)

@@ -5,7 +5,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto, UserRole } from './dto/register.dto'; // Ensure you have this DTO
 import * as bcrypt from 'bcrypt';
 import { UsersService } from 'src/users/users.service';
-import { MailProcessor, MailService } from 'src/mail/mail.service';
+import { MailService } from 'src/mail/mail.service';
 import * as crypto from 'crypto';
 import { ReferralService } from 'src/referral/referral.service';
 import { NotificationService } from 'src/notification/notification.service';
@@ -22,91 +22,7 @@ export class AuthService {
   ) {}
 
 
-async processForgotPassword(email: string): Promise<{ message: string }> {
-  const normalizedEmail = email.toLowerCase().trim();
-  const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
-
-  const genericResponse = { 
-    message: 'If an account matches this email, a secure recovery layout link has been dispatched.' 
-  };
   
-  if (!user) return genericResponse;
-
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-
-  await this.prisma.user.update({
-    where: { id: user.id },
-    data: {
-      resetTokenHash: tokenHash,
-      resetTokenExpires: expiresAt,
-    },
-  });
-
-  const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const resetLink = `${frontendBaseUrl}/reset-password?token=${rawToken}`;
-
-  // Instantiate dummy styling engine references to pass layout templates context down seamlessly
-  const processorMock = new MailProcessor();
-
-  // 🟢 SYNCHRONOUSLY MONITORED RUNTIME COUPLING
-// Inside your auth controller / service:
-this.mailService.sendPasswordResetEmailDirectly(user.email, {
-  name: user.firstName || 'User',
-  resetLink,
-})
-.then(() => {
-  console.log(`✅ SUCCESS LOG: Recovery template transferred to Brevo relay directly for ${user.email}`);
-})
-.catch((mailError) => {
-  console.error('❌ CRITICAL RECOVERY SMTP DISPATCH ERROR:', {
-    message: mailError.message,
-    code: mailError.code,
-    command: mailError.command,
-    response: mailError.response,
-    timestamp: new Date().toISOString()
-  });
-});
-
-  return genericResponse;
-}
-
-  async executePasswordReset(dto: any): Promise<{ success: boolean; message: string }> {
-    // Hash the incoming URL query parameter token to match against the DB record hash
-    const incomingHash = crypto.createHash('sha256').update(dto.token).digest('hex');
-
-    // Query for a matching hash where the token expiration timestamp hasn't passed yet
-    const user = await this.prisma.user.findFirst({
-      where: {
-        resetTokenHash: incomingHash,
-        resetTokenExpires: { gte: new Date() }, // Active validation timeframe check
-      },
-    });
-
-    if (!user) {
-      // 🟢 ADVANCED SECURITY: Return generic message so hackers don't know why it failed
-      throw new BadRequestException('Security token context is invalid or has expired.');
-    }
-
-    // Hash the new credential password securely with 12 rounds
-    const hashedNewPassword = await bcrypt.hash(dto.password, 12);
-
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: hashedNewPassword,
-        resetTokenHash: null,    // 🟢 ADVANCED SECURITY: Immediately burn token on first use
-        resetTokenExpires: null, // Clear expiration parameters completely
-      },
-    });
-
-    return { 
-      success: true, 
-      message: 'Authorization pool updated successfully. Please proceed to login.' 
-    };
-  }
-
 
 
 async verifyUserEmailDirect(userId: string) {
