@@ -5,7 +5,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto, UserRole } from './dto/register.dto'; // Ensure you have this DTO
 import * as bcrypt from 'bcrypt';
 import { UsersService } from 'src/users/users.service';
-import { MailService } from 'src/mail/mail.service';
+import { MailProcessor, MailService } from 'src/mail/mail.service';
 import * as crypto from 'crypto';
 import { ReferralService } from 'src/referral/referral.service';
 import { NotificationService } from 'src/notification/notification.service';
@@ -23,57 +23,54 @@ export class AuthService {
 
 
 async processForgotPassword(email: string): Promise<{ message: string }> {
-    const normalizedEmail = email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
+  const normalizedEmail = email.toLowerCase().trim();
+  const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
 
-    // 🟢 ADVANCED SECURITY: Prevent Account Enumeration. 
-    // Always return the exact same success response immediately, even if the email doesn't exist.
-    const genericResponse = { 
-      message: 'If an account matches this email, a secure recovery layout link has been dispatched.' 
-    };
-    
-    if (!user) return genericResponse;
+  const genericResponse = { 
+    message: 'If an account matches this email, a secure recovery layout link has been dispatched.' 
+  };
+  
+  if (!user) return genericResponse;
 
-    // 1. Generate an unguessable 64-character random payload string
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    
-    // 2. Hash the raw token string using SHA-256 before committing it to the database
-    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    
-    // 3. Set a strict expiration timestamp for exactly 15 minutes from now
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Save token data to user record
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        resetTokenHash: tokenHash,
-        resetTokenExpires: expiresAt,
-      },
-    });
+  await this.prisma.user.update({
+    where: { id: user.id },
+    data: {
+      resetTokenHash: tokenHash,
+      resetTokenExpires: expiresAt,
+    },
+  });
 
-    // 4. Build frontend recovery callback URL route mapping
-    const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const resetLink = `${frontendBaseUrl}/reset-password?token=${rawToken}`;
+  const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const resetLink = `${frontendBaseUrl}/reset-password?token=${rawToken}`;
 
-    // 5. 🟢 DECOUPLED ASYNCHRONOUS EXECUTION:
-    // We intentionally do NOT await this promise. This prevents Brevo connection timeouts
-    // from freezing your HTTP request thread and hanging the frontend app.
-    this.mailService.sendPasswordResetEmail(user.email, {
-      name: user.firstName || 'User',
-      resetLink,
-    }).catch((mailError) => {
-      // Any mailer configuration issue will now safely drop here into your logger panel
-      console.error('❌ CRITICAL RECOVERY SMTP DISPATCH ERROR:', {
-        message: mailError.message,
-        stack: mailError.stack,
-        timestamp: new Date().toISOString()
-      });
-    });
+  // Instantiate dummy styling engine references to pass layout templates context down seamlessly
+  const processorMock = new MailProcessor();
 
-    // Instantly return execution to frontend while background client processes the email
-    return genericResponse;
-  }
+  // 🟢 SYNCHRONOUSLY MONITORED RUNTIME COUPLING
+// Inside your auth controller / service:
+this.mailService.sendPasswordResetEmailDirectly(user.email, {
+  name: user.firstName || 'User',
+  resetLink,
+})
+.then(() => {
+  console.log(`✅ SUCCESS LOG: Recovery template transferred to Brevo relay directly for ${user.email}`);
+})
+.catch((mailError) => {
+  console.error('❌ CRITICAL RECOVERY SMTP DISPATCH ERROR:', {
+    message: mailError.message,
+    code: mailError.code,
+    command: mailError.command,
+    response: mailError.response,
+    timestamp: new Date().toISOString()
+  });
+});
+
+  return genericResponse;
+}
 
   async executePasswordReset(dto: any): Promise<{ success: boolean; message: string }> {
     // Hash the incoming URL query parameter token to match against the DB record hash
