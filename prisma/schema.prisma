@@ -25,6 +25,8 @@ model User {
   referredById           String?
   hasUnlockedVoucher     Boolean              @default(false)
   hasUsedReferralVoucher Boolean              @default(false)
+  resetTokenHash         String? // Stores the SHA-256 hash of the token
+  resetTokenExpires      DateTime? // Strict short-lived expiration timestamp
   signupIp               String?
   pushSubscriptions      PushSubscription[]
   deviceFingerprint      String?

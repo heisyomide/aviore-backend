@@ -22,6 +22,86 @@ export class AuthService {
   ) {}
 
 
+  async processForgotPassword(email: string): Promise<{ message: string }> {
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
+
+    // 🟢 ADVANCED SECURITY: Prevent Account Enumeration. 
+    // Always return the exact same success response, even if the email doesn't exist.
+    const genericResponse = { 
+      message: 'If an account matches this email, a secure recovery layout link has been dispatched.' 
+    };
+    
+    if (!user) return genericResponse;
+
+    // 1. Generate an unguessable 64-character random payload string
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    
+    // 2. Hash the raw token string using SHA-256 before committing it to the database
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    
+    // 3. Set a strict expiration timestamp for exactly 15 minutes from now
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    // Save token data to user record
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        resetTokenHash: tokenHash,
+        resetTokenExpires: expiresAt,
+      },
+    });
+
+    // 4. Build frontend recovery callback URL route mapping
+    const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const resetLink = `${frontendBaseUrl}/reset-password?token=${rawToken}`;
+
+    // 5. Fire background worker job through Brevo mail client node
+    await this.mailService.sendPasswordResetEmail(user.email, {
+      name: user.firstName || 'User',
+      resetLink,
+    });
+
+    return genericResponse;
+  }
+
+  async executePasswordReset(dto: any): Promise<{ success: boolean; message: string }> {
+    // Hash the incoming URL query parameter token to match against the DB record hash
+    const incomingHash = crypto.createHash('sha256').update(dto.token).digest('hex');
+
+    // Query for a matching hash where the token expiration timestamp hasn't passed yet
+    const user = await this.prisma.user.findFirst({
+      where: {
+        resetTokenHash: incomingHash,
+        resetTokenExpires: { gte: new Date() }, // Active validation timeframe check
+      },
+    });
+
+    if (!user) {
+      // 🟢 ADVANCED SECURITY: Return generic message so hackers don't know why it failed
+      throw new BadRequestException('Security token context is invalid or has expired.');
+    }
+
+    // Hash the new credential password securely with 12 rounds
+    const hashedNewPassword = await bcrypt.hash(dto.password, 12);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedNewPassword,
+        resetTokenHash: null,    // 🟢 ADVANCED SECURITY: Immediately burn token on first use
+        resetTokenExpires: null, // Clear expiration parameters completely
+      },
+    });
+
+    return { 
+      success: true, 
+      message: 'Authorization pool updated successfully. Please proceed to login.' 
+    };
+  }
+
+
+
 async verifyUserEmailDirect(userId: string) {
     // 1. Fetch the targeted registration account to ensure it exists
     const updatedUser = await this.prisma.user.findUnique({
