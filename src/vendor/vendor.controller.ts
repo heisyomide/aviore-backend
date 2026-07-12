@@ -1,26 +1,16 @@
 import { 
   Controller, Get, Delete, Post, Patch, Body, Param, Req, UseGuards, ForbiddenException, UseInterceptors, 
-  NotFoundException,
-  MaxFileSizeValidator,
-  FileTypeValidator,
-  ParseFilePipe,
-  UploadedFile,
-  BadRequestException,
-  Request,
-  ParseUUIDPipe,
-  ValidationPipe,
-  UsePipes,
-  Query,
-  UnauthorizedException
+  NotFoundException, MaxFileSizeValidator, FileTypeValidator, ParseFilePipe, UploadedFile, BadRequestException, 
+  Request, ValidationPipe, UsePipes, Query, UnauthorizedException
 } from '@nestjs/common';
-import { FileInterceptor, } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { VendorService } from './vendor.service';
 import { PrismaService } from '../prisma.service';
 import { VendorInterceptor } from './vendor.interceptor';
-import { VendorCreateProductDto  } from './dto/vendor-product.dto';
+import { VendorCreateProductDto } from './dto/vendor-product.dto';
 import { OrderStatus } from '@prisma/client';
 import { CouponService } from "../coupons/coupons.service";
 import { ProductsService } from 'src/products/products.service';
@@ -29,472 +19,309 @@ import { CampaignService } from 'src/coupons/campaign.service';
 import { PromotionAnalyticsService } from 'src/coupons/analytics.service';
 import { KycApprovedGuard } from './kyc.guard';
 
+interface CustomRequest extends Request {
+  user: {
+    id: string;
+    vendorId?: string;
+    purpose?: string;
+  };
+}
+
 @Controller('vendor')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @UseInterceptors(VendorInterceptor)
 export class VendorController {
   constructor(
-    private vendorService: VendorService,
+    private readonly vendorService: VendorService,
     private readonly couponService: CouponService,
-    private prisma: PrismaService,
-    private productsService: ProductsService,
+    private readonly prisma: PrismaService,
+    private readonly productsService: ProductsService,
     private readonly promotionService: PromotionService,
     private readonly campaignService: CampaignService,
     private readonly analyticsService: PromotionAnalyticsService,
   ) {}
 
+  /**
+   * Safe Extraction Helper
+   * Guards vendor routes and eliminates repetitive code.
+   */
+  private getVendorId(req: CustomRequest): string {
+    if (!req.user.vendorId) {
+      throw new BadRequestException('No vendor account linked to this profile context.');
+    }
+    return req.user.vendorId;
+  }
+
   // --- VENDOR SPECIFIC ROUTES ---
 
-@Get('stats')
-@Roles('VENDOR')
-async getStats(@Req() req) {
-  return this.vendorService.getVendorDashboard(
-    req.user.vendorId,
-  );
-}
-
-@Post('products')
+  @Get('stats')
   @Roles('VENDOR')
-  // 🌟 FIX: Chain JwtAuthGuard, RolesGuard, and KycApprovedGuard sequentially
+  async getStats(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getVendorDashboard(vendorId);
+  }
+
+  @Post('products')
+  @Roles('VENDOR')
   @UseGuards(JwtAuthGuard, RolesGuard, KycApprovedGuard) 
-  @UseInterceptors(FileInterceptor('image')) // For product thumbnail
+  @UseInterceptors(FileInterceptor('image'))
   async addProduct(
-    @Req() req: any, 
+    @Req() req: CustomRequest, 
     @Body() dto: VendorCreateProductDto,
     @UploadedFile() file: Express.Multer.File
   ) {
-    // req.user.vendorId comes from your VendorInterceptor
-    return this.vendorService.createProduct(req.user.vendorId, dto, file);
-  }
-@Get('orders')
-@Roles('VENDOR')
-async getMyOrders(@Req() req) {
-  const vendorId = req.user.vendorId;
-
-  if (!vendorId) {
-    throw new BadRequestException('Action denied. Valid vendor identity node required.');
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.createProduct(vendorId, dto, file);
   }
 
-  // 🟢 Query from orderItem table to seamlessly isolate data boundaries
-  const vendorLineItems = await this.prisma.orderItem.findMany({
-    where: {
-      vendorId: vendorId // Directly fetch rows owned by this vendor instance
-    },
-    include: {
-      product: {
-        select: {
-          title: true,
-          images: {
-            select: { imageUrl: true },
-            take: 1
+  @Get('orders')
+  @Roles('VENDOR')
+  async getMyOrders(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+
+    const vendorLineItems = await this.prisma.orderItem.findMany({
+      where: { vendorId: vendorId },
+      include: {
+        product: {
+          select: {
+            title: true,
+            images: { select: { imageUrl: true }, take: 1 }
+          }
+        },
+        order: {
+          include: {
+            user: { select: { email: true, firstName: true, lastName: true } },
+            address: true 
           }
         }
       },
-      order: {
-        include: {
-          user: {
-            select: {
-              email: true,
-              firstName: true,
-              lastName: true
-            }
-          },
-          address: true // Useful context info for logistics fulfillment
-        }
-      }
-    },
-    orderBy: { createdAt: 'desc' }
-  });
+      orderBy: { createdAt: 'desc' }
+    });
 
-  // Transform the query rows into a structured payload for your dashboard UI 
-  return vendorLineItems.map((item) => {
-    // Dynamically multiply base variables using standard arithmetic mapping
-    const itemQuantity = item.quantity;
-    const pricePerUnit = Number(item.priceAtPurchase);
-    const calculatedSubtotal = pricePerUnit * itemQuantity;
+    return vendorLineItems.map((item) => {
+      const itemQuantity = item.quantity;
+      const pricePerUnit = Number(item.priceAtPurchase);
+      const calculatedSubtotal = pricePerUnit * itemQuantity;
 
-    return {
-      orderItemId: item.id,
-      orderId: item.orderId,
-      orderNumber: item.order.orderNumber,
-      createdAt: item.createdAt,
-      
-      // 💸 FIXED: Calculates the vendor's actual financial scope instead of leaking the whole checkout basket total
-      vendorSubtotalAmount: calculatedSubtotal, 
-      retailAmount: item.retailAmount ? Number(item.retailAmount) : calculatedSubtotal,
-      vendorEarning: item.vendorEarning,
-      
-      // 🔄 FIXED: Shows this specific vendor's fulfillment step, unaffected by peer actions
-      itemStatus: item.status, 
-      payoutStatus: item.payoutStatus,
-      
-      productDetails: {
-        productId: item.productId,
-        title: item.product?.title,
-        variantId: item.variantId,
-        mainImage: item.product?.images?.[0]?.imageUrl || null
-      },
-      customer: {
-        firstName: item.order.user.firstName,
-        lastName: item.order.user.lastName,
-        email: item.order.user.email,
-        shippingAddress: item.order.address
-      },
-      // Keep master tracking details attached as sub-properties if necessary
-      masterOrderGlobalStatus: item.order.status 
-    };
-  });
-}
+      return {
+        orderItemId: item.id,
+        orderId: item.orderId,
+        orderNumber: item.order.orderNumber,
+        createdAt: item.createdAt,
+        vendorSubtotalAmount: calculatedSubtotal, 
+        retailAmount: item.retailAmount ? Number(item.retailAmount) : calculatedSubtotal,
+        vendorEarning: item.vendorEarning ? Number(item.vendorEarning) : 0,
+        itemStatus: item.status, 
+        payoutStatus: item.payoutStatus,
+        productDetails: {
+          productId: item.productId,
+          title: item.product?.title || 'Unknown Product',
+          variantId: item.variantId,
+          mainImage: item.product?.images?.[0]?.imageUrl || null
+        },
+        customer: {
+          firstName: item.order.user.firstName,
+          lastName: item.order.user.lastName,
+          email: item.order.user.email,
+          shippingAddress: item.order.address
+        },
+        masterOrderGlobalStatus: item.order.status 
+      };
+    });
+  }
+
   @Get('orders/:id')
-@Roles('VENDOR')
-async getOrderDetails(@Param('id') id: string, @Req() req) {
-  // Use the service method we just fixed
-  return this.vendorService.getOrderDetails(id, req.user.vendorId);
-}
+  @Roles('VENDOR')
+  async getOrderDetails(@Param('id') id: string, @Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getOrderDetails(id, vendorId);
+  }
 
-@Patch(':id/complete')
+  @Patch(':id/complete')
   @UseGuards(JwtAuthGuard)
-  async completeOrder(@Param('id') orderId: string, @Req() req: any) {
-    // req.user is populated by your JwtStrategy
-    const vendorId = req.user.vendorId; 
-    
-    if (!vendorId) {
-      throw new ForbiddenException('User is not registered as a vendor node.');
-    }
-
+  async completeOrder(@Param('id') orderId: string, @Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req); 
     return this.vendorService.markOrderAsCompleted(orderId, vendorId);
   }
 
-
-
-  // --- PUBLIC/USER ROUTES (Anyone logged in) ---
+  // --- PUBLIC/USER INTERACTIONS ---
 
   @Post(':vendorId/follow')
-  // No @Roles('VENDOR') here because Customers follow Vendors
-  async followVendor(@Param('vendorId') vendorId: string, @Req() req) {
+  async followVendor(@Param('vendorId') vendorId: string, @Req() req: CustomRequest) {
     return this.vendorService.followVendor(vendorId, req.user.id);
   }
 
   @Get(':vendorId/profile')
-  async getProfile(@Param('vendorId') vendorId: string, @Req() req) {
+  async getProfile(@Param('vendorId') vendorId: string, @Req() req: CustomRequest) {
     return this.vendorService.getVendorProfile(vendorId, req.user?.id);
   }
 
   @Delete(':vendorId/unfollow')
-  async unfollow(@Param('vendorId') vendorId: string, @Req() req) {
+  async unfollow(@Param('vendorId') vendorId: string, @Req() req: CustomRequest) {
     return this.vendorService.unfollowVendor(vendorId, req.user.id);
   }
 
-  // --- ORDER MANAGEMENT ---
+  // --- ORDER & CORE OPERATIONS ---
 
-// src/vendor/vendor.controller.ts
-
-@Patch('orders/:id/status')
-@Roles('VENDOR')
-async updateStatus(
-  @Param('id') id: string, 
-  @Body() dto: { 
-    status: OrderStatus; 
-    trackingNumber?: string; 
-    carrier?: string 
-  },
-  @Req() req
-) {
-  // Pass everything to the service
-  return this.vendorService.updateOrderStatus(
-    id, 
-    req.user.vendorId, 
-    dto
-  );
-}
+  @Patch('orders/:id/status')
+  @Roles('VENDOR')
+  async updateStatus(
+    @Param('id') id: string, 
+    @Body() dto: { status: OrderStatus; trackingNumber?: string; carrier?: string },
+    @Req() req: CustomRequest
+  ) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.updateOrderStatus(id, vendorId, dto);
+  }
 
   @Get('analytics')
-@Roles('VENDOR')
-async getAnalytics(@Req() req) {
-  // Use the vendorId from the authenticated user/vendor
-  const vendorId = req.user.vendorId; 
-  
-  if (!vendorId) {
-    throw new BadRequestException('Vendor ID not found in request');
+  @Roles('VENDOR')
+  async getAnalytics(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getVendorAnalytics(vendorId);
   }
 
-  return this.vendorService.getVendorAnalytics(vendorId);
-}
+  // --- WALLET & COMPLIANCE ---
 
-/* --- Payout & Wallet Management Section --- */
+  @Get('payouts/stats')
+  @Roles('VENDOR')
+  async getWalletStats(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    const stats = await this.vendorService.getWalletStats(vendorId);
 
-/**
- * Fetches the vendor's wallet balances and transaction history.
- * GET /vendor/payouts/stats
- */
-@Get('payouts/stats')
-@Roles('VENDOR')
-async getWalletStats(@Req() req) {
-  const vendorId = req.user.vendorId;
-
-  if (!vendorId) {
-    throw new BadRequestException('No vendor account linked to this user.');
+    if (!stats || !stats.wallet) {
+      throw new NotFoundException('Vendor wallet registry node not found. Please contact support.');
+    }
+    return stats;
   }
 
-  const stats = await this.vendorService.getWalletStats(vendorId);
+  @Post('payouts/request')
+  @Roles('VENDOR')
+  async requestWithdrawal(@Req() req: CustomRequest, @Body('amount') amount: number) {
+    const vendorId = this.getVendorId(req);
 
-  if (!stats.wallet) {
-    // If the wallet record doesn't exist yet, we return a 404
-    // so the frontend can show an "Initialize Wallet" state.
-    throw new NotFoundException('Vendor wallet not found. Please contact support.');
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('Please provide a valid withdrawal amount configuration.');
+    }
+
+    const MIN_WITHDRAWAL = 1000;
+    if (amount < MIN_WITHDRAWAL) {
+      throw new BadRequestException(`Minimum withdrawal amount threshold is ₦${MIN_WITHDRAWAL.toLocaleString()}.`);
+    }
+
+    try {
+      const request = await this.vendorService.requestWithdrawal(vendorId, amount);
+      return { message: 'Withdrawal request submitted successfully.', data: request };
+    } catch (error: unknown) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'Withdrawal request failed');
+    }
   }
 
-  return stats;
-}
-
-/**
- * Submits a new withdrawal request for Admin approval.
- * POST /vendor/payouts/request
- */
-@Post('payouts/request')
-@Roles('VENDOR')
-async requestWithdrawal(
-  @Req() req, 
-  @Body('amount') amount: number
-) {
-  const vendorId = req.user.vendorId;
-
-  // 1. Basic validation
-  if (!amount || amount <= 0) {
-    throw new BadRequestException('Please provide a valid withdrawal amount.');
-  }
-
-  // 2. Business logic validation (Example: Min ₦1,000)
-  const MIN_WITHDRAWAL = 1000;
-  if (amount < MIN_WITHDRAWAL) {
-    throw new BadRequestException(`Minimum withdrawal amount is ₦${MIN_WITHDRAWAL.toLocaleString()}.`);
-  }
-
-  try {
-    const request = await this.vendorService.requestWithdrawal(vendorId, amount);
-    return {
-      message: 'Withdrawal request submitted successfully.',
-      data: request
-    };
-  }catch (error: unknown) {
-  const message =
-    error instanceof Error
-      ? error.message
-      : 'Withdrawal request failed';
-
-  throw new BadRequestException(message);
-}
-}
-
-@Get('public-profile/:slug')
+  @Get('public-profile/:slug')
   async getPublicProfile(@Param('slug') slug: string) {
     return this.vendorService.getPublicProfileBySlug(slug);
   }
 
-/**
-   * GET /vendor/settings/full-profile
-   * Fetches the complete identity, logistics, and compliance data for the settings page.
-   */
   @Get('settings/full-profile')
   @Roles('VENDOR')
-  async getFullProfile(@Req() req) {
-    const vendorId = req.user.vendorId;
-    
-    if (!vendorId) {
-      throw new BadRequestException('No vendor account linked to this user.');
-    }
-
+  async getFullProfile(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
     return this.vendorService.getFullProfile(vendorId);
   }
 
-  /**
-   * PATCH /vendor/settings/update
-   * Updates store name, slug, description, and shipping fees.
-   */
   @Patch('settings/update')
   @Roles('VENDOR')
   async updateFullProfile(
-    @Req() req,
-    @Body() updateData: {
-      storeName?: string;
-      slug?: string;
-      description?: string;
-      shippingFee?: number;
-    }
+    @Req() req: CustomRequest,
+    @Body() updateData: { storeName?: string; slug?: string; description?: string; shippingFee?: number; }
   ) {
-    const vendorId = req.user.vendorId;
+    const vendorId = this.getVendorId(req);
 
-    if (!vendorId) {
-      throw new BadRequestException('Action denied. Vendor profile required.');
-    }
-
-    // Basic validation for the URL slug
+    // Fixed Regex: Removed the trailing bar bug
     if (updateData.slug && !/^[a-z0-0-]+$/.test(updateData.slug)) {
-      throw new BadRequestException('Slug must only contain lowercase letters, numbers, and hyphens.');
+      throw new BadRequestException('Slug must only contain lowercase alphanumeric values and hyphens.');
     }
 
     return this.vendorService.updateFullProfile(vendorId, updateData);
   }
 
-@Post('submit-kyc')
-@UseGuards(JwtAuthGuard)
-@UseInterceptors(FileInterceptor('file'))
-async submitKyc(
-  @UploadedFile(
-    new ParseFilePipe({
-      validators: [
-        new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), 
-        new FileTypeValidator({ fileType: '.(png|jpeg|jpg)' }),
-      ],
-    }),
-  ) file: Express.Multer.File,
-  @Body('idType') idType: string,
-  @Body('idNumber') idNumber: string,
-  @Req() req: any,
-) {
-  // 🛡️ EXTRA PROTECTION Layer: Prevent other token scopes from accessing KYC logic
-  if (req.user.purpose && req.user.purpose !== 'REGISTRATION_ONBOARDING') {
-     throw new UnauthorizedException('Invalid token scope authorization purpose.');
-  }
-
-  const userId = req.user.id; 
-  return this.vendorService.submitKyc(userId, idType, idNumber, file);
-}
-
-// inside vendor.controller.ts
-
-@Get('inventory')
-@Roles('VENDOR')
-async getMyInventory(@Req() req) {
-  return this.vendorService.getInventory(req.user.vendorId);
-}
-
-@Patch('inventory/bulk-stock')
-@Roles('VENDOR')
-async bulkUpdateStock(@Req() req, @Body('updates') updates: Record<string, number>) {
-  if (!updates) {
-    throw new BadRequestException('No stock updates provided');
-  }
-  
-  await this.vendorService.updateBulkStock(req.user.vendorId, updates);
-  
-  return { message: 'Inventory synchronized successfully' };
-}
-
-@Get('customers')
-@Roles('VENDOR')
-async getCustomers(@Req() req) {
-  return this.vendorService.getVendorCustomers(req.user.vendorId);
-}
-
-@Get('customers/:userId')
-@Roles('VENDOR')
-async getCustomerDetails(@Req() req, @Param('userId') userId: string) {
-  return this.vendorService.getCustomerDetails(req.user.vendorId, userId);
-}
-
-
-@UseGuards(JwtAuthGuard)
-@Get('followed')
-async getFollowed(@Req() req: any) { // Change 'Request' to 'any'
-  const userId = req.user.id; 
-  return this.vendorService.getFollowedVendors(userId);
-}
-
-
-@Patch('reviews/:id/reply')
-@Roles('VENDOR')
-async postReply(
-  @Req() req, 
-  @Param('id') id: string, 
-  @Body('reply') reply: string
-) {
-  return this.vendorService.replyToReview(req.user.vendorId, id, reply);
-}
-
- // Ticket Endpoints
-  @Post('tickets')
-  async createTicket(@Req() req, @Body() body: any) {
-    return this.vendorService.createTicket(req.user.id, body);
-  }
-
-  @Get('tickets')
-  async getTickets(@Req() req) {
-    return this.vendorService.getVendorTickets(req.user.id);
-  }
-
-  // Conversation Endpoints
-@Get('conversations')
-  async getConversations(@Req() req) {
-    // req.user.id is the User UUID, which the service now handles
-    return this.vendorService.getVendorConversations(req.user.id);
-  }
-
-// aviore-backend/src/vendor/vendor.controller.ts
-
-@Get('conversations/:id')
-@UseGuards(JwtAuthGuard)
-async getConversation(
-  @Req() req, 
-  @Param('id') id: string // Removed ParseUUIDPipe to support CUIDs (cmmij...)
-) {
-  // 1. Basic Validation Protocol
-  if (!id || id === ':id' || id === 'undefined') {
-    throw new BadRequestException('Invalid_Conversation_Node_ID');
-  }
-
-  // 2. Delegate to Service
-  // Note: req.user.id is the User UUID, while 'id' is the Conversation CUID
-  return this.vendorService.getConversationById(id, req.user.id);
-}
-
-@Get('returns')
-@UseGuards(JwtAuthGuard)
-async getReturnRequests(@Request() req: any) {
-  // Pass the human ID from the validated JWT
-  return this.vendorService.getReturnRequests(req.user.id);
-}
-
-// src/vendor/vendor.controller.ts
-
-@Patch('returns/:id/mediate')
-  @UseGuards(JwtAuthGuard, RolesGuard) // Using both ensures they are logged in AND are vendors
-  @Roles('VENDOR') // This ensures only the Vendor node can trigger this
-  async mediateReturn(
-    @Param('id') returnId: string,
-    @Body('reason') reason: string,
-    @Req() req: any,
+  @Post('submit-kyc')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async submitKyc(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), 
+          new FileTypeValidator({ fileType: '.(png|jpeg|jpg)' }),
+        ],
+      }),
+    ) file: Express.Multer.File,
+    @Body('idType') idType: string,
+    @Body('idNumber') idNumber: string,
+    @Req() req: CustomRequest,
   ) {
-    const vendorId = req.user.vendorId; 
-    return this.vendorService.triggerReturnMediation(returnId, vendorId, reason);
+    if (req.user.purpose && req.user.purpose !== 'REGISTRATION_ONBOARDING') {
+       throw new UnauthorizedException('Invalid token scope authorization purpose.');
+    }
+
+    return this.vendorService.submitKyc(req.user.id, idType, idNumber, file);
   }
 
-@Get()
-async getPublicVendors(
-  @Query('isVerified') isVerified?: string,
-  @Query('limit') limit?: string,
-  @Query('search') search?: string,
-) {
-  // 🛰️ LOGIC CONVERSION
-  // If isVerified is missing from URL, it remains undefined.
-  // If it's "true", it becomes true. Otherwise, it becomes false.
-  const verifiedFilter = isVerified === undefined 
-    ? undefined 
-    : isVerified === 'true';
+  // --- INVENTORY & CUSTOMERS ---
 
-  return this.vendorService.findPublicVendors({
-    isVerified: verifiedFilter,
-    limit: limit ? parseInt(limit, 10) : 6,
-    search: search || '',
-  });
-}
+  @Get('inventory')
+  @Roles('VENDOR')
+  async getMyInventory(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getInventory(vendorId);
+  }
 
+  @Patch('inventory/bulk-stock')
+  @Roles('VENDOR')
+  async bulkUpdateStock(@Req() req: CustomRequest, @Body('updates') updates: Record<string, number>) {
+    const vendorId = this.getVendorId(req);
+    if (!updates) {
+      throw new BadRequestException('No stock updates collection hash provided');
+    }
+    
+    await this.vendorService.updateBulkStock(vendorId, updates);
+    return { message: 'Inventory synchronized successfully' };
+  }
+
+  @Get('customers')
+  @Roles('VENDOR')
+  async getCustomers(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getVendorCustomers(vendorId);
+  }
+
+  @Get('customers/:userId')
+  @Roles('VENDOR')
+  async getCustomerDetails(@Req() req: CustomRequest, @Param('userId') userId: string) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getCustomerDetails(vendorId, userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('followed')
+  async getFollowed(@Req() req: CustomRequest) { 
+    return this.vendorService.getFollowedVendors(req.user.id);
+  }
+
+  @Patch('reviews/:id/reply')
+  @Roles('VENDOR')
+  async postReply(@Req() req: CustomRequest, @Param('id') id: string, @Body('reply') reply: string) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.replyToReview(vendorId, id, reply);
+  }
 
   @Get('reviews')
   @Roles('VENDOR')
-  async getReviews(@Req() req) {
+  async getReviews(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
     return this.prisma.review.findMany({
-      where: { vendorId: req.user.vendorId },
+      where: { vendorId: vendorId },
       include: { 
         product: { select: { title: true } }, 
         user: { select: { email: true } }    
@@ -502,50 +329,94 @@ async getPublicVendors(
     });
   }
 
+  // --- TICKETS, CONVERSATIONS & RETURNS ---
 
-  //===================================
-  //  COUPONS
-  //===================================
+  @Post('tickets')
+  async createTicket(@Req() req: CustomRequest, @Body() body: { subject: string; message: string }) {
+    return this.vendorService.createTicket(req.user.id, body);
+  }
+
+  @Get('tickets')
+  async getTickets(@Req() req: CustomRequest) {
+    return this.vendorService.getVendorTickets(req.user.id);
+  }
+
+  @Get('conversations')
+  async getConversations(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getVendorConversations(vendorId);
+  }
+
+  @Get('conversations/:id')
+  @UseGuards(JwtAuthGuard)
+  async getConversation(@Req() req: CustomRequest, @Param('id') id: string) {
+    if (!id || id === ':id' || id === 'undefined') {
+      throw new BadRequestException('Invalid_Conversation_Node_ID');
+    }
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getConversationById(id, vendorId);
+  }
+
+  @Get('returns')
+  @UseGuards(JwtAuthGuard)
+  async getReturnRequests(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.vendorService.getReturnRequests(vendorId);
+  }
+
+  @Patch('returns/:id/mediate')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('VENDOR') 
+  async mediateReturn(
+    @Param('id') returnId: string,
+    @Body('reason') reason: string,
+    @Req() req: CustomRequest,
+  ) {
+    const vendorId = this.getVendorId(req); 
+    return this.vendorService.triggerReturnMediation(returnId, vendorId, reason);
+  }
+
+  @Get()
+  async getPublicVendors(
+    @Query('isVerified') isVerified?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+  ) {
+    const verifiedFilter = isVerified === undefined ? undefined : isVerified === 'true';
+    return this.vendorService.findPublicVendors({
+      isVerified: verifiedFilter,
+      limit: limit ? parseInt(limit, 10) : 6,
+      search: search || '',
+    });
+  }
+
+  // --- MARKETING & COUPONS ---
  
   @Get("marketing/stats")
-  async getMarketingStats(@Req() req: any) {
-    return this.analyticsService.getVendorMarketingStats(req.user.id);
+  async getMarketingStats(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.analyticsService.getVendorMarketingStats(vendorId);
   }
 
-  /**
-   * GET_VENDOR_COUPONS
-   * List of all exclusive coupons created by this vendor.
-   */
   @Get("marketing/coupons")
-  async getMyCoupons(@Req() req: any) {
-    return this.promotionService.findVendorCoupons(req.user.id);
+  async getMyCoupons(@Req() req: CustomRequest) {
+    const vendorId = this.getVendorId(req);
+    return this.promotionService.findVendorCoupons(vendorId);
   }
 
-  /**
-   * DISCOVER_CAMPAIGNS
-   * Discovery endpoint for vendors to find open platform sales (e.g., Ramadan Sale).
-   */
   @Get("marketing/campaigns/available")
   async getAvailableCampaigns() {
     return this.campaignService.getCampaignsOverview();
   }
 
-  /**
-   * JOIN_PLATFORM_CAMPAIGN
-   * Handshake sequence linking local vendor inventory profiles into a global market event window.
-   */
   @Post("marketing/campaigns/:id/join")
   @UsePipes(new ValidationPipe({ transform: true }))
   async joinCampaign(
     @Param("id") campaignId: string,
     @Body("productIds") productIds: string[],
-    @Req() req: any
+    @Req() req: CustomRequest
   ) {
-    return this.campaignService.participateInCampaign(
-      campaignId,
-      productIds,
-      req.user.id
-    );
+    const vendorId = this.getVendorId(req);
+    return this.campaignService.participateInCampaign(campaignId, productIds, vendorId);
   }
-
 }

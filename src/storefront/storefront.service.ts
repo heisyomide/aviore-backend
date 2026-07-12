@@ -1,12 +1,22 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { ProductStatus, VendorStatus, Prisma, VoucherStatus } from '@prisma/client';
 import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 import { activeProductFilter, buildVendorWhereClause } from './helpers/query-builders';
 import { normalizeProduct, ProductWithRelations, NormalizedProductOutput } from './helpers/product-normalizer';
 
+// 🚀 ZERO-BUDGET RAM CACHE MEMORY STRUCTURES
+interface CacheEntry {
+  data: any;
+  expiry: number;
+}
+
 @Injectable()
 export class StorefrontService {
+  // A local in-memory cache map that costs absolutely zero dollars
+  private cacheMap = new Map<string, CacheEntry>();
+  private readonly CACHE_TTL_MS = 15 * 60 * 1000; // 15 Minutes cache life
+
   constructor(private readonly prisma: PrismaService) {}
 
   private readonly productIncludes = {
@@ -32,7 +42,30 @@ export class StorefrontService {
     return uuidRegex.test(str);
   }
 
+  // Helper utility to handle localized caching mechanics safely
+  private getCachedData<T>(key: string): T | null {
+    const entry = this.cacheMap.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiry) {
+      this.cacheMap.delete(key); // Clear expired entries
+      return null;
+    }
+    return entry.data as T;
+  }
+
+  private setCacheData(key: string, data: any): void {
+    this.cacheMap.set(key, {
+      data,
+      expiry: Date.now() + this.CACHE_TTL_MS,
+    });
+  }
+
   async getRegistryData() {
+    // 🛡️ CHECK CACHE FIRST: If homepage registry exists in memory, return it instantly
+    const cacheKey = 'storefront_registry_data';
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const heroCategoryNames = [
       'Electronics', 'Fashion', 'Home & Living', 
       'Groceries & Food', 'Beauty & Personal Care', 'Luxury & Premium'
@@ -59,13 +92,10 @@ export class StorefrontService {
       absoluteIdList.push(...ids);
     });
 
-    // 🎲 DICE SHUFFLE UPGRADE STEP 1: Shuffle the grouped category categories
-    // Calculate total pool matching these categories to fetch a dynamic sliding window slice
     const totalCount = await this.prisma.product.count({
       where: { ...activeProductFilter, categoryId: { in: absoluteIdList } },
     });
 
-    // We want a safe skip boundary ensuring we get a substantial amount of products to distribute across categories
     const batchSize = 100; 
     let randomSkip = 0;
     if (totalCount > batchSize) {
@@ -75,7 +105,7 @@ export class StorefrontService {
     const [allProductsRaw, vendorsRaw] = await Promise.all([
       this.prisma.product.findMany({
         where: { ...activeProductFilter, categoryId: { in: absoluteIdList } },
-        skip: randomSkip, // 👈 Breaks static layout tracking instantly
+        skip: randomSkip, 
         take: batchSize,
         include: this.productIncludes,
       }),
@@ -89,7 +119,6 @@ export class StorefrontService {
       })
     ]);
 
-    // Memory array shuffling utility (Fisher-Yates) for an absolute random appearance mix
     const shuffleArray = (array: any[]) => {
       for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -116,7 +145,7 @@ export class StorefrontService {
       .map(name => sections.find(s => s.title === name))
       .filter(Boolean);
 
-    return {
+    const finalOutput = {
       sections: orderedSections,
       vendors: vendorsRaw.map(v => ({
         ...v,
@@ -125,19 +154,24 @@ export class StorefrontService {
         productsCount: v._count.products,
       })),
     };
+
+    // Save final assembly payload array to memory cache layer
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getHomepageRegistry() {
-    const targetFeedSize = 20;
+    // 🛡️ CHECK CACHE FIRST: Protects serverless limits from dynamic discovery polling loops
+    const cacheKey = 'storefront_homepage_registry';
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
 
-    // 🎲 DICE SHUFFLE UPGRADE STEP 2: Handle global "Explore your interest" feed
-    // Fetch total active global platform count across all vendors
+    const targetFeedSize = 20;
     const totalGlobalProducts = await this.prisma.product.count({
       where: activeProductFilter,
     });
 
     let globalRandomSkip = 0;
-    // If the database has more items than our target return size, slide the skip window randomly
     if (totalGlobalProducts > targetFeedSize) {
       const maxPossibleSkip = totalGlobalProducts - targetFeedSize;
       globalRandomSkip = Math.floor(Math.random() * maxPossibleSkip);
@@ -147,7 +181,7 @@ export class StorefrontService {
       this.prisma.product.findMany({
         where: activeProductFilter,
         take: targetFeedSize,
-        skip: globalRandomSkip, // 👈 Offsets static listings so old posts match new ones on refresh
+        skip: globalRandomSkip, 
         include: {
           ...this.productIncludes,
           reviews: { select: { rating: true } }
@@ -164,10 +198,9 @@ export class StorefrontService {
       })
     ]);
 
-    // Shuffle the final slice block inside server runtime memory so sorting order is organic
     const finalShuffledExplore = exploreProducts.sort(() => Math.random() - 0.5);
 
-    return {
+    const finalOutput = {
       vendors: topVendors,
       sections: [
         { 
@@ -178,6 +211,9 @@ export class StorefrontService {
         }
       ]
     };
+
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getAllVendors(searchTerm?: string) {
@@ -192,6 +228,10 @@ export class StorefrontService {
   }
 
   async getVendorStorefront(identifier: string) {
+    const cacheKey = `vendor_storefront_${identifier}`;
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const vendorSelection = {
       id: true, storeName: true, slug: true, description: true, imageUrl: true, isVerified: true,
       _count: { select: { followers: true, products: true } },
@@ -225,13 +265,21 @@ export class StorefrontService {
     }
 
     if (!vendor) throw new NotFoundException('Vendor_Registry_Node_Null_Or_Empty');
-    return {
+    
+    const finalOutput = {
       ...vendor,
       products: vendor.products.map((p) => normalizeProduct(p as unknown as ProductWithRelations))
     };
+
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getActiveCampaigns() {
+    const cacheKey = 'active_campaigns';
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const campaigns = await this.prisma.campaign.findMany({
       where: { isActive: true, startDate: { lte: new Date() }, endDate: { gte: new Date() } },
       include: {
@@ -246,7 +294,7 @@ export class StorefrontService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return campaigns.map((campaign: any) => ({ 
+    const finalOutput = campaigns.map((campaign: any) => ({ 
       id: campaign.id,
       title: campaign.title,
       description: campaign.description,
@@ -261,19 +309,33 @@ export class StorefrontService {
         campaignDiscount: campaign.discount,
       })),
     }));
+
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getTopDeals() {
+    const cacheKey = 'top_deals';
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const products = await this.prisma.product.findMany({
       where: { ...activeProductFilter, stock: { gt: 0 } },
       take: 3,
       include: this.productIncludes,
       orderBy: { createdAt: 'desc' }
     });
-    return products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    const finalOutput = products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getBestSellers(limit: number = 10) {
+    const cacheKey = `best_sellers_${limit}`;
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const topSellingData = await this.prisma.orderItem.groupBy({
       by: ['productId'],
       _sum: { quantity: true },
@@ -292,20 +354,34 @@ export class StorefrontService {
         category: { select: { name: true } },
       },
     });
-    return products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    const finalOutput = products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getCategoryStrip(slug: string) {
+    const cacheKey = `category_strip_${slug}`;
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const products = await this.prisma.product.findMany({
       where: { ...activeProductFilter, category: { slug } },
       take: 8,
       include: this.productIncludes,
       orderBy: { createdAt: 'desc' }
     });
-    return products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    const finalOutput = products.map((p) => normalizeProduct(p as unknown as ProductWithRelations));
+    
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getSubcategoryWorldData(parentSlug: string, groupSlug: string) {
+    const cacheKey = `subcategory_world_${parentSlug}_${groupSlug}`;
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const standardCombinedSlug = `${parentSlug}-${groupSlug}`;
     const reverseCombinedSlug = `${groupSlug}-${parentSlug}`;
     const isolatedGroupToken = groupSlug.replace(`${parentSlug}-`, '').replace(`-${parentSlug}`, '');
@@ -352,7 +428,7 @@ export class StorefrontService {
 
     if (!currentGroup) throw new NotFoundException(`Ecosystem branch matching /${parentSlug}/${groupSlug} could not be synchronized.`);
 
-    return {
+    const finalOutput = {
       ...currentGroup,
       products: (currentGroup.products || []).map((p) => normalizeProduct(p as unknown as ProductWithRelations)),
       children: (currentGroup.children || []).map(child => ({
@@ -360,9 +436,16 @@ export class StorefrontService {
         products: (child.products || []).map((p) => normalizeProduct(p as unknown as ProductWithRelations))
       })),
     };
+
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getCategoryWorldData(parentSlug: string) {
+    const cacheKey = `category_world_${parentSlug}`;
+    const cachedResult = this.getCachedData(cacheKey);
+    if (cachedResult) return cachedResult;
+
     const category = await this.prisma.category.findUnique({
       where: { slug: parentSlug },
       include: {
@@ -401,7 +484,7 @@ export class StorefrontService {
 
     if (!category) throw new NotFoundException(`Category ${parentSlug} not found.`);
 
-    return {
+    const finalOutput = {
       id: category.id,
       name: category.name,
       slug: category.slug,
@@ -419,6 +502,9 @@ export class StorefrontService {
         };
       }),
     };
+
+    this.setCacheData(cacheKey, finalOutput);
+    return finalOutput;
   }
 
   async getDiscoveryProducts(query: StorefrontProductsQueryDto) {
@@ -440,13 +526,11 @@ export class StorefrontService {
 
     let orderByClause: Prisma.ProductOrderByWithRelationInput | Prisma.ProductOrderByWithRelationInput[] = { createdAt: 'desc' };
     
-    // 🎲 DICE SHUFFLE UPGRADE STEP 3: Handle Discovery/Search default random option
     if (sort === 'trending') {
       orderByClause = [{ reviewCount: 'desc' }, { averageRating: 'desc' }];
     } else if (sort === 'newest') {
       orderByClause = { createdAt: 'desc' };
     } else if (!sort || sort === 'random') {
-      // If no explicit filter sorting criteria is selected, inject randomized sliding offsets
       const totalDiscoveryCount = await this.prisma.product.count({ where: whereClause });
       if (totalDiscoveryCount > takeLimit) {
         const structuralCeiling = Math.max(0, totalDiscoveryCount - takeLimit);

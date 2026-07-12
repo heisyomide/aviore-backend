@@ -1,6 +1,5 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Query, Req, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import { StorefrontService } from './storefront.service';
 import { StorefrontProductsQueryDto } from './dto/products-query.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
@@ -12,17 +11,14 @@ export class StorefrontController {
 
   @ApiOperation({ summary: 'Retrieve personalized feed blocks for the user home screen' })
   @ApiResponse({ status: 200, description: 'Feed objects successfully built.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(300) // ⚡ 5-Minute Cache Layer eliminates 99% of Neon backend compute surges
   @Get('homepage')
   async getHomepage() {
+    // ⚡ Controlled safely by service memory cache
     return this.storefrontService.getHomepageRegistry();
   }
 
   @ApiOperation({ summary: 'Fetch all active, verified marketplace store nodes' })
   @ApiResponse({ status: 200, description: 'Verified merchant list.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(600)
   @Get('vendors')
   async getVendors() {
     return this.storefrontService.getAllVendors();
@@ -30,17 +26,14 @@ export class StorefrontController {
 
   @ApiOperation({ summary: 'Fetch unified department layout data structure' })
   @ApiResponse({ status: 200, description: 'Registry blocks parsed successfully.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(900) // Rarely changes; cached heavily in RAM
   @Get('registry')
   async getRegistry() {
+    // ⚡ Controlled safely by service memory cache
     return this.storefrontService.getRegistryData();
   }
 
   @ApiOperation({ summary: 'Retrieve limited curated drop deals' })
   @ApiResponse({ status: 200, description: 'Top flash products payload.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(120)
   @Get('top-deals')
   async getTopDeals() {
     return this.storefrontService.getTopDeals();
@@ -49,8 +42,6 @@ export class StorefrontController {
   @ApiOperation({ summary: 'Retrieve metrics-aggregated top grossing items' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Best sellers array.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(600)
   @Get('best-sellers')
   async getBestSellers(@Query('limit') limit: number = 10) {
     return this.storefrontService.getBestSellers(limit);
@@ -58,8 +49,6 @@ export class StorefrontController {
 
   @ApiOperation({ summary: 'Fetch currently active timeline marketplace campaigns' })
   @ApiResponse({ status: 200, description: 'Active promotions and items map.' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(300)
   @Get('campaigns/active')
   async getCampaigns() {
     return this.storefrontService.getActiveCampaigns();
@@ -82,8 +71,6 @@ export class StorefrontController {
   }
 
   @ApiOperation({ summary: 'Level 2 Category overview root data node tracking' })
-  @UseInterceptors(CacheInterceptor)
-  @CacheTTL(600)
   @Get('category/:parentSlug')
   async getCategoryWorld(@Param('parentSlug') parentSlug: string) {
     return this.storefrontService.getCategoryWorldData(parentSlug.trim().toLowerCase());
